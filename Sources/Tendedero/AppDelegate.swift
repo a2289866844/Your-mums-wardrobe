@@ -28,19 +28,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// the cursor has visited it and left, or the shortcut is pressed again.
     private var pinned = false
     /// A new screenshot shows itself for a moment, then tucks away.
-    private var peekUntil = Date.distantPast
+    private var capturePreview = CapturePreview()
     private var hotZoneSince: Date?
+    private var hoverReveal = HoverReveal()
+    private var hoverBlockedUntilExit = false
     /// After a click in the menu bar the line stays up there hidden until the
     /// pointer leaves the menu bar, so it does not come back over a menu.
     private var menuBarSuppressed = false
     private var clickMonitors: [Any] = []
     private var awaySince: Date?
-    /// Whether the line should be up, if nothing prevents it. A full screen
-    /// app on that screen does: the line waits until you leave full screen.
+    /// Whether there is a line to show, including in full screen Spaces.
     private var wanted = false
     /// Set when you open the line on purpose, so it stays up while empty.
     private var keepOpen = false
-    private var lastLiveCount = 0
     /// The screen a new capture was taken on: the line goes there.
     private var pendingScreen: NSScreen?
 
@@ -50,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel = LinePanel(content: host)
         panel.placeOnScreen()
         updateCapacity()
+        line.onCapture = { [weak self] in self?.captureAdded() }
 
         if Inbox.isEnabled { Inbox.apply() }
         restoreSettingsOnTermination()
@@ -76,8 +77,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didActivateApplicationNotification] {
             workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.refresh()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self?.refresh() }
+                    self?.workspaceChanged()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self?.workspaceChanged() }
                 }
             }
         }
@@ -121,7 +122,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         safetyWatcher?.stop()
         safetyWatcher = nil
         watcher = ScreenshotWatcher(
-            onNew: { [weak self] url in self?.hangCapture(url) },
+            onNew: { [weak self] url in self?.hangCapture(url) ?? false },
             onChange: { [weak self] in self?.line.prune() })
         watcher.start()
         if Inbox.isEnabled, watcher.folder.standardizedFileURL != ScreenshotWatcher.desktop.standardizedFileURL {
@@ -129,7 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 folder: ScreenshotWatcher.desktop,
                 onNew: { [weak self] url in
                     log.notice("Screenshot landed on the Desktop despite inbox mode: \(url.lastPathComponent, privacy: .public)")
-                    self?.hangCapture(url)
+                    return self?.hangCapture(url) ?? false
                 },
                 onChange: { [weak self] in self?.line.prune() })
             safety.start()
@@ -147,14 +148,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func offerInbox() {
         Inbox.wasOffered = true
         let alert = NSAlert()
-        alert.messageText = L("Let Tendedero handle your screenshots?",
-                              "¿Quieres que Tendedero se encargue de tus capturas?")
+        alert.messageText = L("Let Clipline handle your screenshots?",
+                              "¿Quieres que Clipline se encargue de tus capturas?")
         alert.informativeText = L(
-            "Screenshots will hang on the line the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. Drag one to a folder to keep it, or discard it with the cross. You can turn this off from the menu bar, and your settings come back when Tendedero quits.",
-            "Las capturas se colgarán al instante, sin la miniatura flotante, y no se acumularán en el Escritorio. Arrastra una a una carpeta para guardarla, o descártala con la cruz. Puedes desactivarlo desde la barra de menús, y tus ajustes vuelven a ser los de antes al salir de Tendedero.")
+            "Screenshots will hang on the line the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. Drag one to a folder to keep it, or discard it with the cross. You can turn this off from the menu bar, and your settings come back when Clipline quits.",
+            "Las capturas se colgarán al instante, sin la miniatura flotante, y no se acumularán en el Escritorio. Arrastra una a una carpeta para guardarla, o descártala con la cruz. Puedes desactivarlo desde la barra de menús, y tus ajustes vuelven a ser los de antes al salir de Clipline.")
         alert.addButton(withTitle: L("Turn on", "Activar"))
         alert.addButton(withTitle: L("Not now", "Ahora no"))
-        if let icon = NSImage(named: "Tendedero") ?? NSApp.applicationIconImage { alert.icon = icon }
+        if let icon = NSImage(named: "Clipline") ?? NSApp.applicationIconImage { alert.icon = icon }
         NSApp.activate(ignoringOtherApps: true)
         if alert.runModal() == .alertFirstButtonReturn { setInbox(true) }
     }
@@ -176,40 +177,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Showing and hiding
 
+    private func captureAdded() {
+        panel.placeOnScreen(pendingScreen)
+        pendingScreen = nil
+        updateCapacity()
+        wanted = true
+        refresh()
+        reveal(forCapture: true)
+    }
+
     private func itemsChanged() {
-        let live = line.liveCount
-        if live > lastLiveCount {
-            panel.placeOnScreen(pendingScreen)
-            pendingScreen = nil
-            updateCapacity()
+        if line.liveCount > 0 {
             wanted = true
             refresh()
-            reveal(peekFor: 2.5)
-        } else if live == 0 && !keepOpen {
+        } else if !keepOpen {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
                 guard let self, self.line.liveCount == 0, !self.keepOpen else { return }
                 self.wanted = false
                 self.refresh()
             }
         }
-        lastLiveCount = live
     }
 
     // MARK: The capture flying to the line
 
     /// A new screenshot lifts off from where it was taken and flies to its
     /// place on the line. Without a known capture area it simply drops in.
-    private func hangCapture(_ url: URL) {
+    @discardableResult
+    private func hangCapture(_ url: URL) -> Bool {
+        if line.items.contains(where: { $0.url == url && !$0.falling }) { return true }
         let from = captureRect(of: url)
         if let from {
             let center = CGPoint(x: from.midX, y: from.midY)
             pendingScreen = NSScreen.screens.first { NSMouseInRect(center, $0.frame, false) }
         }
-        guard let id = line.hang(url, flying: from != nil), let from else { return }
+        guard let id = line.hang(url, flying: from != nil) else {
+            pendingScreen = nil
+            return false
+        }
+        guard let from else { return true }
         // Let the line come down and lay out before measuring the landing spot.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
             self?.fly(id, from: from)
         }
+        return true
     }
 
     private func fly(_ id: UUID, from: CGRect) {
@@ -252,12 +263,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                       width: size.width, height: size.height)
     }
 
-    /// Decides whether the panel is ordered in at all: something to show,
-    /// and no full screen app on that screen.
+    /// Reposition and reorder the overlay after a Space or application switch.
+    /// Keep existing display deadlines; switching apps must not restart them.
+    private func workspaceChanged() {
+        menuBarSuppressed = false
+        hotZoneSince = nil
+        panel.placeOnScreen()
+        updateCapacity()
+        refresh()
+    }
+
+    /// Order the panel in whenever there is something to show, in every Space.
     private func refresh() {
-        let blocked = panel.screen.map(FullScreen.isActive(on:))
-            ?? LinePanel.screenUnderPointer().map(FullScreen.isActive(on:)) ?? false
-        if wanted && !blocked {
+        if wanted {
             present()
         } else {
             dismiss()
@@ -268,7 +286,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func present() {
-        guard !isPresent else { return }
         isPresent = true
         panel.alphaValue = 1
         panel.orderFrontRegardless()
@@ -284,10 +301,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func reveal(pinned: Bool = false, peekFor seconds: TimeInterval = 0) {
+    private func reveal(pinned: Bool = false, forCapture: Bool = false, fromHover: Bool = false) {
         guard isPresent else { return }
+        if forCapture { capturePreview.start(at: Date()) } else { capturePreview.cancel() }
+        if fromHover, let screen = panel.screen {
+            hoverReveal.start(on: screen.frame)
+        } else {
+            hoverReveal.cancel()
+        }
         if pinned { self.pinned = true }
-        if seconds > 0 { peekUntil = Date().addingTimeInterval(seconds) }
         awaySince = nil
         setRevealed(true)
     }
@@ -297,8 +319,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         isRevealed = on
         line.revealed = on
         if !on {
+            hoverReveal.cancel()
             pinned = false
-            peekUntil = .distantPast
+            capturePreview.cancel()
             panel.ignoresMouseEvents = true
         }
     }
@@ -339,7 +362,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// How long the cursor rests against the top edge before the line comes
     /// down. Short enough to feel instant, long enough that a quick trip to
     /// the menu bar does not trigger it.
-    private static let revealDelay: TimeInterval = 0.25
+    private static let revealDelay: TimeInterval = 0.08
 
     /// The menu bar strip at the top of a screen. With an auto-hiding menu
     /// bar the visible frame reaches the top, so the system thickness is used.
@@ -372,7 +395,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     /// How long the cursor is away before the line tucks back up.
-    private static let retractDelay: TimeInterval = 0.5
+    private static let retractDelay: TimeInterval = 5
 
     private func tick() {
         let mouse = NSEvent.mouseLocation
@@ -380,14 +403,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let screenUnderPointer = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
         let inMenuBar = screenUnderPointer.map { Self.menuBarBand(of: $0).contains(mouse) } ?? false
+        let inRevealZone = screenUnderPointer.map {
+            Self.menuBarBand(of: $0).insetBy(dx: 0, dy: -6).contains(mouse)
+        } ?? false
+        if !inRevealZone { hoverBlockedUntilExit = false }
         if !inMenuBar { menuBarSuppressed = false }
 
         guard isRevealed else {
             // Resting in the menu bar brings the line down on that screen.
             // Pushing against the top edge is part of it, and it also works
             // when another display sits above and the pointer never stops.
-            if let screen = screenUnderPointer, inMenuBar, !menuBarSuppressed,
-               !FullScreen.isActive(on: screen) {
+            if let screen = screenUnderPointer, inRevealZone, !menuBarSuppressed, !hoverBlockedUntilExit {
                 let since = hotZoneSince ?? now
                 hotZoneSince = since
                 if now.timeIntervalSince(since) >= Self.revealDelay {
@@ -397,11 +423,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         updateCapacity()
                     }
                     refresh()
-                    reveal()
+                    reveal(fromHover: true)
                 }
             } else {
                 hotZoneSince = nil
             }
+            return
+        }
+
+        if capturePreview.shouldRetract(at: now) {
+            // A pointer left in the hot zone must not immediately reopen a
+            // preview whose three-second lifetime has just ended.
+            hoverBlockedUntilExit = true
+            hotZoneSince = nil
+            awaySince = nil
+            setRevealed(false)
+            return
+        }
+
+        if hoverReveal.isActive {
+            updateMousePassThrough(mouse)
+            if hoverReveal.shouldRetract(pointer: mouse) {
+                awaySince = nil
+                setRevealed(false)
+            }
+            // Hover reveals use only the screen's upper-third region, with
+            // no three-second limit or five-second pointer-away grace.
             return
         }
 
@@ -412,14 +459,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var zone = panel.frame
         if let screen = panel.screen { zone.size.height = screen.frame.maxY - zone.minY }
         let inside = NSMouseInRect(mouse, zone, false)
-        if inside && pinned { pinned = false }
+        if inside {
+            pinned = false
+        }
 
-        let busy = pinned || GrabView.isDragging || line.pressedID != nil || now < peekUntil
+        let busy = pinned || GrabView.isDragging || line.pressedID != nil
         if inside || busy {
             awaySince = nil
         } else {
             let since = awaySince ?? now
             awaySince = since
+            // Space/app changes do not restart the pointer-away deadline.
             if now.timeIntervalSince(since) >= Self.retractDelay {
                 awaySince = nil
                 setRevealed(false)
@@ -449,7 +499,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setUpStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let image = NSImage(systemSymbolName: "tshirt", accessibilityDescription: "Tendedero")
+        let image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: "Clipline")
         image?.isTemplate = true
         statusItem.button?.image = image
         let menu = NSMenu()
@@ -503,7 +553,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(login)
 
         menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem(L("Quit Tendedero", "Salir de Tendedero"), key: "q") {
+        menu.addItem(ClosureMenuItem(L("Quit Clipline", "Salir de Clipline"), key: "q") {
             NSApp.terminate(nil)
         })
     }
@@ -518,8 +568,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             let alert = NSAlert()
             alert.messageText = L("Could not change the login setting", "No se pudo cambiar el inicio de sesión")
-            alert.informativeText = L("Move Tendedero to the Applications folder and try again.",
-                                      "Mueve Tendedero a la carpeta Aplicaciones y vuelve a intentarlo.")
+            alert.informativeText = L("Move Clipline to the Applications folder and try again.",
+                                      "Mueve Clipline a la carpeta Aplicaciones y vuelve a intentarlo.")
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
         }

@@ -1,0 +1,14 @@
+Clipline 1.0.1 — macOS 14+ / Apple Silicon and Intel
+
+安裝：把 Clipline.app 拖到 Applications，再啟動。
+首次啟動如被 macOS 阻擋：系統設定 → 隱私權與安全性 → Clipline → 強制打開（Open Anyway）。
+這個分享版使用 ad-hoc 簽章，未經 Apple 公證。
+
+選單列迴紋針：開啟設定；Control + Option + T：顯示／隱藏。
+新截圖顯示 3 秒；滑鼠召喚後，離開螢幕頂部三分之一會立即收起。
+手動召喚後，滑鼠進入浮層再離開，5 秒後收起。
+接管截圖位置是自選功能；啟用後，圖片的叉會將 Clipline 資料夾中的檔案送到垃圾桶。
+
+下載、原始碼與說明：https://github.com/a2289866844/clipline
+Based on Tendedero by Alejandro Buján. Independent modified build, not endorsed by the original author.
+License and original attribution: LICENSE.txt and LICENSE in the repository.

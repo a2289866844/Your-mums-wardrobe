@@ -2,7 +2,7 @@ import AppKit
 import Combine
 import os
 
-let log = Logger(subsystem: "app.tendedero.Tendedero", category: "line")
+let log = Logger(subsystem: "io.github.a2289866844.clipline", category: "line")
 
 /// One screenshot hanging on the line.
 struct Pegged: Identifiable, Equatable {
@@ -37,18 +37,21 @@ final class Line: ObservableObject {
     var hitRects: [UUID: CGRect] = [:]
 
     var maxItems = 8
-
+    /// Called for each new capture, even when the line is already at capacity.
+    var onCapture: (() -> Void)?
+    private let defaults: UserDefaults
 
     var soundOn: Bool {
-        get { !UserDefaults.standard.bool(forKey: "soundOff") }
-        set { UserDefaults.standard.set(!newValue, forKey: "soundOff") }
+        get { !defaults.bool(forKey: "soundOff") }
+        set { defaults.set(!newValue, forKey: "soundOff") }
     }
 
     var liveCount: Int { items.filter { !$0.falling }.count }
 
     private let storeKey = "pegged"
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         restore()
         scheduleGust()
     }
@@ -67,7 +70,10 @@ final class Line: ObservableObject {
             drop(oldest.id, quietly: true)
         }
         save()
-        if !quietly { play("Tink", volume: 0.35) }
+        if !quietly {
+            onCapture?()
+            play("Tink", volume: 0.35)
+        }
         return item.id
     }
 
@@ -151,7 +157,7 @@ final class Line: ObservableObject {
         contentsOfFile: "/System/Library/Components/CoreAudio.component/Contents/SharedSupport/SystemSounds/dock/drag to trash.aif",
         byReference: true)
 
-    /// Whether the file lives in Tendedero's own folder. Those are discarded
+    /// Whether the file lives in Clipline's own folder. Those are discarded
     /// to the Trash, or the folder would fill up with forgotten screenshots.
     /// Files anywhere else, like the Desktop, stay where they are.
     func isInInbox(_ id: UUID) -> Bool {
@@ -224,13 +230,18 @@ final class Line: ObservableObject {
 
     private func save() {
         let paths = items.filter { !$0.falling }.map(\.url.path)
-        UserDefaults.standard.set(paths, forKey: storeKey)
+        defaults.set(paths, forKey: storeKey)
     }
 
     private func restore() {
-        let paths = UserDefaults.standard.stringArray(forKey: storeKey) ?? []
-        for path in paths where FileManager.default.fileExists(atPath: path) {
-            hang(URL(fileURLWithPath: path), quietly: true)
+        let paths = defaults.stringArray(forKey: storeKey) ?? []
+        var restored = Set<String>()
+        // Loading is not a new capture: do not enforce the default capacity
+        // or overwrite the saved list while it is still being restored.
+        items = paths.compactMap { path in
+            guard restored.insert(path).inserted,
+                  let thumb = makeThumbnail(URL(fileURLWithPath: path)) else { return nil }
+            return Pegged(url: URL(fileURLWithPath: path), thumb: thumb)
         }
     }
 

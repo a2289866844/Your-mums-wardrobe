@@ -1,10 +1,10 @@
 import SwiftUI
 
 enum Layout {
-    static let panelHeight: CGFloat = 210
+    static let panelHeight: CGFloat = 280
     static let ropeTop: CGFloat = 10
-    static let spacing: CGFloat = 174
-    static let cardWidth: CGFloat = 150
+    static let spacing: CGFloat = 244
+    static let cardWidth: CGFloat = 220
     static let pinAbove: CGFloat = 9.5
 
     /// The rope hangs as a parabola from edge to edge of the screen.
@@ -50,7 +50,7 @@ struct LineView: View {
             // Tucked away, the whole line waits above the top edge and slides
             // out from under the menu bar, the way an auto-hiding Dock does.
             .offset(y: line.revealed ? 0 : -(Layout.panelHeight + 12))
-            .animation(line.revealed ? .spring(response: 0.42, dampingFraction: 0.82)
+            .animation(line.revealed ? .spring(response: 0.20, dampingFraction: 0.82)
                                      : .easeIn(duration: 0.22), value: line.revealed)
         }
         .onPreferenceChange(HitRectsKey.self) { rects in

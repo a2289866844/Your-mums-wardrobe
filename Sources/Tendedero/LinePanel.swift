@@ -1,9 +1,13 @@
 import AppKit
 
 /// A transparent strip along the top of the screen that floats over every
-/// app and every Space except full screen ones, never takes focus, and lets clicks pass through
+/// app and every Space, including full screen, never takes focus, and lets clicks pass through
 /// everywhere except over the photos.
 final class LinePanel: NSPanel {
+    static let overlayBehavior: NSWindow.CollectionBehavior = [
+        .canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary, .stationary, .ignoresCycle
+    ]
+
     init(content: NSView) {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
                    backing: .buffered, defer: false)
@@ -11,9 +15,7 @@ final class LinePanel: NSPanel {
         backgroundColor = .clear
         hasShadow = false
         level = .floating
-        // Every Space except full screen ones: a video or a presentation in full
-        // screen should never get a clothesline across the top.
-        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        collectionBehavior = Self.overlayBehavior
         hidesOnDeactivate = false
         isMovable = false
         becomesKeyOnlyIfNeeded = true
@@ -33,8 +35,12 @@ final class LinePanel: NSPanel {
     }
 
     func placeOnScreen(_ screen: NSScreen? = nil) {
-        guard let visible = (screen ?? LinePanel.screenUnderPointer())?.visibleFrame else { return }
-        let target = NSRect(x: visible.minX, y: visible.maxY - Layout.panelHeight,
+        guard let screen = screen ?? LinePanel.screenUnderPointer() else { return }
+        let visible = screen.visibleFrame
+        // Keep the line below the menu bar even when full screen auto-hides it.
+        let menuHeight = max(NSStatusBar.system.thickness, screen.safeAreaInsets.top)
+        let top = min(visible.maxY, screen.frame.maxY - menuHeight)
+        let target = NSRect(x: visible.minX, y: top - Layout.panelHeight,
                             width: visible.width, height: Layout.panelHeight)
         if frame != target { setFrame(target, display: true) }
     }
