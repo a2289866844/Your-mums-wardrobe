@@ -13,70 +13,114 @@ final class ScreenshotWatcher {
     private var known = Set<String>()
     private var source: DispatchSourceFileSystemObject?
     private var pending: DispatchWorkItem?
+    private var recovery: DispatchWorkItem?
+    private var active = false
+    private var generation = 0
+    private var attachment = 0
+    private var initializedBaseline = false
+    private var reportedOpenFailure = false
     private var retryCounts: [String: Int] = [:]
     private var incompleteSources: [String: DispatchSourceFileSystemObject] = [:]
     private let onNew: (URL) -> Bool
     private let onChange: () -> Void
+    private let launchDate: Date
+    private let recoveryInterval: TimeInterval
+    private let openDirectory: (String) -> Int32
+    private let listDirectory: (URL) throws -> [URL]
 
     private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "tif", "tiff", "gif", "webp"]
 
     static let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
 
     /// Watches the folder macOS saves screenshots to, or a given folder.
-    init(folder: URL? = nil, onlyTaggedScreenshots: Bool? = nil,
+    init(folder: URL? = nil, onlyTaggedScreenshots: Bool? = nil, startedAt: Date = Date(),
+         recoveryInterval: TimeInterval = 1,
+         openDirectory: @escaping (String) -> Int32 = { open($0, O_EVTONLY) },
+         listDirectory: @escaping (URL) throws -> [URL] = {
+             try FileManager.default.contentsOfDirectory(
+                 at: $0, includingPropertiesForKeys: [.creationDateKey], options: [.skipsHiddenFiles])
+         },
          onNew: @escaping (URL) -> Bool, onChange: @escaping () -> Void) {
         self.onNew = onNew
         self.onChange = onChange
+        self.launchDate = startedAt
+        self.recoveryInterval = max(0.01, recoveryInterval)
+        self.openDirectory = openDirectory
+        self.listDirectory = listDirectory
         self.folder = folder ?? Self.screenshotFolder()
         self.onlyTaggedScreenshots = onlyTaggedScreenshots
             ?? (self.folder.standardizedFileURL.path == Self.desktop.standardizedFileURL.path)
     }
 
     static func screenshotFolder() -> URL {
-        let fm = FileManager.default
         // Read fresh through cfprefsd: inbox mode changes this value at runtime.
         CFPreferencesAppSynchronize("com.apple.screencapture" as CFString)
         // macOS 27 keeps it in "location-screenshot"; earlier versions in "location".
         let domain = "com.apple.screencapture" as CFString
         let raw = (CFPreferencesCopyAppValue("location-screenshot" as CFString, domain) as? String)
             ?? (CFPreferencesCopyAppValue("location" as CFString, domain) as? String)
-        if let raw, !raw.isEmpty {
-            let url = URL(fileURLWithPath: (raw as NSString).expandingTildeInPath, isDirectory: true)
-            var isDir: ObjCBool = false
-            if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue { return url }
-        }
-        return fm.homeDirectoryForCurrentUser.appendingPathComponent("Desktop", isDirectory: true)
+        return screenshotFolder(configuredPath: raw)
     }
 
-    /// Anything created after the app launched counts as new, even if it
-    /// landed before the watcher was ready (macOS may be asking for Desktop
-    /// access at that moment).
-    private let launchDate = Date()
+    static func screenshotFolder(configuredPath: String?) -> URL {
+        // A missing or temporarily inaccessible destination is still the
+        // user's selection. Retry that path instead of getting stuck on Desktop.
+        guard let configuredPath, !configuredPath.isEmpty else { return desktop }
+        return URL(fileURLWithPath: (configuredPath as NSString).expandingTildeInPath, isDirectory: true)
+    }
 
     func start() {
         stop()
         known = []
         retryCounts = [:]
-        let fd = open(folder.path, O_EVTONLY)
+        initializedBaseline = false
+        reportedOpenFailure = false
+        active = true
+        attach()
+    }
+
+    private func attach() {
+        guard active, source == nil else { return }
+        let fd = openDirectory(folder.path)
         guard fd >= 0 else {
-            NSLog("Clipline: cannot watch \(folder.path)")
+            if !reportedOpenFailure {
+                NSLog("Clipline: cannot watch \(folder.path); retrying")
+                reportedOpenFailure = true
+            }
+            scheduleRecovery()
             return
         }
+        reportedOpenFailure = false
+        attachment += 1
+        let currentAttachment = attachment
         let src = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main)
-        src.setEventHandler { [weak self] in self?.scheduleScan() }
+            fileDescriptor: fd, eventMask: [.write, .rename, .delete, .revoke], queue: .main)
+        src.setEventHandler { [weak self] in
+            guard let self, self.active, self.attachment == currentAttachment,
+                  let events = self.source?.data else { return }
+            if !events.intersection([.rename, .delete, .revoke]).isEmpty {
+                self.source?.cancel()
+                self.source = nil
+                self.attachment += 1
+                self.scheduleRecovery()
+            } else {
+                self.scheduleScan()
+            }
+        }
         src.setCancelHandler { close(fd) }
         src.resume()
         source = src
         // Watch before listing, so a capture arriving during startup still
         // generates an event rather than falling into the listing/open gap.
-        if let files = listing() {
-            known = Set(files.filter { creationDate($0) < launchDate }.map(\.path))
-        }
         scan()
     }
 
     func stop() {
+        active = false
+        generation += 1
+        attachment += 1
+        recovery?.cancel()
+        recovery = nil
         pending?.cancel()
         pending = nil
         source?.cancel()
@@ -93,8 +137,9 @@ final class ScreenshotWatcher {
         guard fd >= 0 else { return }
         let incomplete = DispatchSource.makeFileSystemObjectSource(
             fileDescriptor: fd, eventMask: [.write, .attrib, .rename, .delete], queue: .main)
+        let currentGeneration = generation
         incomplete.setEventHandler { [weak self] in
-            guard let self else { return }
+            guard let self, self.active, self.generation == currentGeneration else { return }
             self.incompleteSources.removeValue(forKey: url.path)?.cancel()
             self.scheduleScan()
         }
@@ -104,16 +149,37 @@ final class ScreenshotWatcher {
     }
 
     private func scheduleScan(resetRetries: Bool = true) {
+        guard active else { return }
         if resetRetries { retryCounts = [:] }
         pending?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.scan() }
+        let currentGeneration = generation
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.active, self.generation == currentGeneration else { return }
+            self.pending = nil
+            self.scan()
+        }
         pending = work
         // macOS writes a hidden temp file and renames it; give it a moment.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: work)
     }
 
     private func scan() {
-        guard let files = listing() else { return }
+        guard active else { return }
+        guard source != nil else {
+            scheduleRecovery()
+            return
+        }
+        guard let files = listing() else {
+            scheduleRecovery()
+            return
+        }
+        recovery?.cancel()
+        recovery = nil
+        if !initializedBaseline {
+            // Preserve the original cutoff across denied access and retries.
+            known.formUnion(files.filter { creationDate($0) < launchDate }.map(\.path))
+            initializedBaseline = true
+        }
         let paths = Set(files.map(\.path))
         known.formIntersection(paths)
         retryCounts = retryCounts.filter { paths.contains($0.key) }
@@ -149,9 +215,21 @@ final class ScreenshotWatcher {
     }
 
     private func listing() -> [URL]? {
-        guard let urls = try? FileManager.default.contentsOfDirectory(
-            at: folder, includingPropertiesForKeys: [.creationDateKey], options: [.skipsHiddenFiles]) else { return nil }
+        guard let urls = try? listDirectory(folder) else { return nil }
         return urls.sorted { creationDate($0) < creationDate($1) }
+    }
+
+    private func scheduleRecovery() {
+        guard active, recovery == nil else { return }
+        let currentGeneration = generation
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.active, self.generation == currentGeneration else { return }
+            self.recovery = nil
+            if self.source == nil { self.attach() }
+            else { self.scan() }
+        }
+        recovery = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + recoveryInterval, execute: work)
     }
 
     private func creationDate(_ url: URL) -> Date {

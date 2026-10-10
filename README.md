@@ -8,7 +8,7 @@ A customized macOS screenshot and clipboard shelf, based on [Alejandro Buján's 
 
 ## Install and use
 
-1. Download `Clipline-1.1.3-universal.dmg` from Releases.
+1. Download `Clipline-1.1.4-universal.dmg` from Releases.
 2. Open the disk image, drag `Clipline.app` to `Applications`, and launch it.
 3. If macOS blocks the app, open **System Settings → Privacy & Security**, find the Clipline notice, and choose **Open Anyway**. This shared build uses an ad-hoc signature and is not notarized by Apple. See [Apple's opening instructions](https://support.apple.com/guide/mac-help/mh40616/mac).
 4. Allow access to your screenshot folder when macOS asks; an update may prompt again. The paperclip in the menu bar is Clipline.
@@ -38,6 +38,7 @@ If macOS **Show Floating Thumbnail** is enabled, a screenshot may appear in Clip
 - Image cards are enlarged, and repeated opening and closing at the top edge has been fixed. Press and hold an image to open Markup; other card types have no long-press action.
 - Fixes cover new screenshots failing to reveal a full shelf, truncated lists after restarting, and images being permanently missed before they finish writing.
 - Since 1.1.1, Desktop screenshots are recognized using either macOS extended attributes or screenshot markers inside the image. Ordinary Desktop images are not automatically added.
+- Since 1.1.4, screenshot monitoring recovers automatically when folder access becomes available after an initial failure. It also reconnects if the watched folder is replaced. Captures made while startup waits for permission remain eligible for collection.
 
 ## Build from source
 

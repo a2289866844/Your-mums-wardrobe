@@ -6,6 +6,8 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    /// Include captures made while startup is waiting for folder permission.
+    private let screenshotMonitoringStartedAt = Date()
     private let line: Line
     /// Verification hosts can watch a dedicated fixture folder without
     /// reading Desktop or changing the user's screenshot preferences.
@@ -70,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             else { prepareScreenshotFolder() }
         }
         restoreSettingsOnTermination()
-        startWatcher()
+        startWatcher(startedAt: screenshotMonitoringStartedAt)
         setClipboardEnabled(clipboardEnabled)
 
         hotKey = HotKey(keyCode: kVK_ANSI_T, modifiers: controlKey | optionKey) { [weak self] in
@@ -156,18 +158,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func startWatcher() {
+    private func startWatcher(startedAt: Date = Date()) {
         watcher?.stop()
         safetyWatcher?.stop()
         safetyWatcher = nil
         watcher = ScreenshotWatcher(
             folder: screenshotFolder,
+            startedAt: startedAt,
             onNew: { [weak self] url in self?.hangCapture(url) ?? false },
             onChange: { [weak self] in self?.line.prune() })
         watcher.start()
         if screenshotFolder == nil, Inbox.isEnabled, watcher.folder.standardizedFileURL != ScreenshotWatcher.desktop.standardizedFileURL {
             let safety = ScreenshotWatcher(
                 folder: ScreenshotWatcher.desktop,
+                startedAt: startedAt,
                 onNew: { [weak self] url in
                     log.notice("Screenshot landed on the Desktop despite inbox mode: \(url.lastPathComponent, privacy: .public)")
                     return self?.hangCapture(url) ?? false

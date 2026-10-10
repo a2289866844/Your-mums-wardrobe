@@ -1,4 +1,4 @@
-Clipline 1.1.3 — macOS 14+ / Apple Silicon and Intel
+Clipline 1.1.4 — macOS 14+ / Apple Silicon and Intel
 
 Install: drag Clipline.app to Applications, then launch it.
 If macOS blocks the first launch: System Settings → Privacy & Security → Clipline → Open Anyway.
@@ -9,6 +9,9 @@ Since 1.1.2, if screenshots are saved directly to Desktop during initial setup,
 Clipline creates Desktop/Screenshots (named 截圖 on Chinese-language systems)
 and saves new screenshots there. Existing custom locations are preserved.
 Old screenshots are not moved. This folder setting remains after quitting Clipline.
+Screenshot monitoring retries if folder access is temporarily unavailable and
+reconnects when the watched folder is replaced. Allow screenshot-folder access
+when macOS asks; an app update may prompt again.
 Click a card to open it. Right-click → Copy to copy it.
 Press and hold an image for Markup; other card types have no long-press action.
 Dragging delivers images and files as files, full text as text, and links as URLs.
