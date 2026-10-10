@@ -1,14 +1,30 @@
-Clipline 1.0.1 — macOS 14+ / Apple Silicon and Intel
+Clipline 1.1.0 — macOS 14+ / Apple Silicon and Intel
 
 安裝：把 Clipline.app 拖到 Applications，再啟動。
 首次啟動如被 macOS 阻擋：系統設定 → 隱私權與安全性 → Clipline → 強制打開（Open Anyway）。
 這個分享版使用 ad-hoc 簽章，未經 Apple 公證。
 
 選單列迴紋針：開啟設定；Control + Option + T：顯示／隱藏。
-新截圖顯示 3 秒；滑鼠召喚後，離開螢幕頂部三分之一會立即收起。
+單擊卡片：開啟。右鍵 Copy：複製。長按圖片：Markup；其他卡片沒有長按操作。
+拖曳圖片與檔案以檔案傳遞，文字以完整文字傳遞，連結以 URL 傳遞。
+文字卡片只顯示摘要；複製與拖曳不截短全文。卡片高度一致，圖片完整縮放而不裁切。
+
+Hang copied items 預設開啟：收集新複製的圖片、純文字、HTTP(S) 連結與檔案參照。
+支援上述內容類型；不保證保留每種 App 的所有剪貼簿格式。
+可在選單列關閉以暫停。受保護剪貼簿標記會被略過，但無法辨識所有機密資料。
+複製敏感內容前可先暫停收集。
+內容在本機保存並於重啟後還原；剪貼簿產生的內容存於：
+~/Library/Application Support/Clipline/Clipboard
+外部檔案保留原檔案參照。依螢幕寬度提供 3–12 個位置，滿載時最舊卡片掉落，並非無限歷史。
+
+新截圖或剪貼簿內容無人操作時顯示 3 秒；按住、拖曳或右鍵選單操作會延後收起。
+滑鼠召喚後，離開螢幕頂部三分之一會立即收起。
 手動召喚後，滑鼠進入浮層再離開，5 秒後收起。
-接管截圖位置是自選功能；啟用後，圖片的叉會將 Clipline 資料夾中的檔案送到垃圾桶。
+接管截圖位置是自選功能；啟用後，截圖存於 ~/Library/Application Support/Clipline/Screenshots。
+這個截圖收件匣中的截圖按叉會送到垃圾桶；外部檔案參照按叉只移除卡片，保留原檔案。
 
 下載、原始碼與說明：https://github.com/a2289866844/clipline
+問題回報：https://github.com/a2289866844/clipline/issues
+請提供 macOS / Clipline 版本、重現步驟、預期與實際結果；分享畫面前請移除私人內容。
 Based on Tendedero by Alejandro Buján. Independent modified build, not endorsed by the original author.
 License and original attribution: LICENSE.txt and LICENSE in the repository.

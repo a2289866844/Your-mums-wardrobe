@@ -4,7 +4,7 @@ import XCTest
 
 final class RegressionTests: XCTestCase {
     private func temporaryFolder() throws -> URL {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("tendedero-test-\(UUID().uuidString)")
+        let folder = FileManager.default.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("tendedero-test-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         addTeardownBlock { try? FileManager.default.removeItem(at: folder) }
         return folder
@@ -36,7 +36,7 @@ final class RegressionTests: XCTestCase {
         }
         let defaults = isolatedDefaults()
         defaults.set(paths, forKey: "pegged")
-        let line = Line(defaults: defaults)
+        let line = Line(defaults: defaults, clipboardFolder: folder.appendingPathComponent("Clipboard"))
         XCTAssertEqual(line.liveCount, 12)
         XCTAssertEqual(line.items.map(\.url.path), paths)
         XCTAssertEqual(defaults.stringArray(forKey: "pegged"), paths)
@@ -45,7 +45,7 @@ final class RegressionTests: XCTestCase {
     @MainActor
     func testFullLineStillSignalsEveryNewCapture() throws {
         let folder = try temporaryFolder()
-        let line = Line(defaults: isolatedDefaults())
+        let line = Line(defaults: isolatedDefaults(), clipboardFolder: try temporaryFolder().appendingPathComponent("Clipboard"))
         line.maxItems = 2
         var notifications = 0
         line.onCapture = { notifications += 1 }
@@ -66,7 +66,7 @@ final class RegressionTests: XCTestCase {
     func testUnreadableCaptureDoesNotSignalSuccess() throws {
         let url = try temporaryFolder().appendingPathComponent("unfinished.png")
         try Data().write(to: url)
-        let line = Line(defaults: isolatedDefaults())
+        let line = Line(defaults: isolatedDefaults(), clipboardFolder: try temporaryFolder().appendingPathComponent("Clipboard"))
         var notifications = 0
         line.onCapture = { notifications += 1 }
         XCTAssertNil(line.hang(url))

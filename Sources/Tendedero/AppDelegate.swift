@@ -6,7 +6,10 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private let line = Line()
+    private let line: Line
+    /// Verification hosts can watch a dedicated fixture folder without
+    /// reading Desktop or changing the user's screenshot preferences.
+    private let screenshotFolder: URL?
     private var panel: LinePanel!
     private var statusItem: NSStatusItem!
     private var watcher: ScreenshotWatcher!
@@ -14,6 +17,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// ignores the screenshot settings (macOS 27 renamed one), captures keep
     /// landing on the Desktop, and they still hang on the line.
     private var safetyWatcher: ScreenshotWatcher?
+    private var clipboardWatcher: ClipboardWatcher?
+    private var clipboardEnabled: Bool {
+        UserDefaults.standard.object(forKey: "clipboardEnabled") as? Bool ?? true
+    }
     private var signalSources: [DispatchSourceSignal] = []
     private var hotKey: HotKey?
     private var cancellables = Set<AnyCancellable>()
@@ -44,6 +51,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The screen a new capture was taken on: the line goes there.
     private var pendingScreen: NSScreen?
 
+    init(line: Line? = nil, screenshotFolder: URL? = nil) {
+        self.line = line ?? Line()
+        self.screenshotFolder = screenshotFolder
+        super.init()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         let host = NSHostingView(rootView: LineView(line: line))
         host.sizingOptions = []
@@ -52,9 +65,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateCapacity()
         line.onCapture = { [weak self] in self?.captureAdded() }
 
-        if Inbox.isEnabled { Inbox.apply() }
+        if screenshotFolder == nil, Inbox.isEnabled { Inbox.apply() }
         restoreSettingsOnTermination()
         startWatcher()
+        setClipboardEnabled(clipboardEnabled)
 
         hotKey = HotKey(keyCode: kVK_ANSI_T, modifiers: controlKey | optionKey) { [weak self] in
             self?.toggle()
@@ -92,7 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
 
-        if !Inbox.wasOffered {
+        if screenshotFolder == nil, !Inbox.wasOffered {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.offerInbox() }
         }
 
@@ -112,7 +126,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        if Inbox.isEnabled { Inbox.restore() }
+        clipboardWatcher?.stop()
+        if screenshotFolder == nil, Inbox.isEnabled { Inbox.restore() }
+    }
+
+    private func setClipboardEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: "clipboardEnabled")
+        clipboardWatcher?.stop()
+        clipboardWatcher = nil
+        guard enabled else { return }
+        let watcher = ClipboardWatcher { [weak self] payload in
+            self?.line.ingestClipboard(payload) ?? false
+        }
+        clipboardWatcher = watcher
+        watcher.start()
     }
 
     // MARK: Inbox mode
@@ -122,10 +149,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         safetyWatcher?.stop()
         safetyWatcher = nil
         watcher = ScreenshotWatcher(
+            folder: screenshotFolder,
             onNew: { [weak self] url in self?.hangCapture(url) ?? false },
             onChange: { [weak self] in self?.line.prune() })
         watcher.start()
-        if Inbox.isEnabled, watcher.folder.standardizedFileURL != ScreenshotWatcher.desktop.standardizedFileURL {
+        if screenshotFolder == nil, Inbox.isEnabled, watcher.folder.standardizedFileURL != ScreenshotWatcher.desktop.standardizedFileURL {
             let safety = ScreenshotWatcher(
                 folder: ScreenshotWatcher.desktop,
                 onNew: { [weak self] url in
@@ -139,6 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func setInbox(_ on: Bool) {
+        guard screenshotFolder == nil else { return }
         Inbox.isEnabled = on
         if on { Inbox.apply() } else { Inbox.restore() }
         startWatcher()
@@ -146,6 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Asked once. Changing system settings is the user's call, never ours.
     private func offerInbox() {
+        guard screenshotFolder == nil else { return }
         Inbox.wasOffered = true
         let alert = NSAlert()
         alert.messageText = L("Let Clipline handle your screenshots?",
@@ -166,8 +196,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for sig in [SIGTERM, SIGINT, SIGHUP] {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-            source.setEventHandler {
-                if Inbox.isEnabled { Inbox.restore() }
+            source.setEventHandler { [weak self] in
+                if self?.screenshotFolder == nil, Inbox.isEnabled { Inbox.restore() }
                 exit(0)
             }
             source.resume()
@@ -257,7 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let x = Layout.x(index: index, count: line.items.count, width: width)
         let viewTop = Layout.ropeY(x: x, width: width) - Layout.pinAbove
         let cardTop = viewTop + PeggedView.cardOffsetBelowTop
-        let size = PeggedView.cardSize(for: line.items[index].thumb.size)
+        let size = PeggedView.cardSize
         return CGRect(x: panel.frame.minX + x - size.width / 2,
                       y: panel.frame.maxY - cardTop - size.height,
                       width: size.width, height: size.height)
@@ -431,6 +461,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
 
+        // A deadline may expire during an interaction, but a card must not
+        // disappear beneath a held pointer, an active drag, or its menu.
+        if GrabView.isDragging || GrabView.isPresentingMenu || line.pressedID != nil {
+            updateMousePassThrough(mouse)
+            awaySince = nil
+            return
+        }
+
         if capturePreview.shouldRetract(at: now) {
             // A pointer left in the hot zone must not immediately reopen a
             // preview whose three-second lifetime has just ended.
@@ -524,10 +562,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         clearItem.isEnabled = line.liveCount > 0
         menu.addItem(clearItem)
 
+        let clipboard = ClosureMenuItem(L("Hang copied items", "Colgar elementos copiados")) { [weak self] in
+            guard let self else { return }
+            self.setClipboardEnabled(!self.clipboardEnabled)
+        }
+        clipboard.state = clipboardEnabled ? .on : .off
+        clipboard.toolTip = L("Keep new copied images, text, links and files locally on the line",
+                              "Guarda imágenes, texto, enlaces y archivos copiados en la línea, solo en este Mac")
+        menu.addItem(clipboard)
+
         let inbox = ClosureMenuItem(L("Handle screenshots", "Encargarse de las capturas")) { [weak self] in
             self?.setInbox(!Inbox.isEnabled)
         }
         inbox.state = Inbox.isEnabled ? .on : .off
+        inbox.isEnabled = screenshotFolder == nil
         inbox.toolTip = L("Screenshots hang instantly and skip the Desktop",
                           "Las capturas se cuelgan al instante y no pasan por el Escritorio")
         menu.addItem(inbox)

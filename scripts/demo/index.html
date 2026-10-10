@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clipline — local demo</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #26352e; background: #f4f5f0; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button { font: inherit; cursor: pointer; }
+    .shell { max-width: 1440px; margin: auto; padding: 38px 48px 30px; }
+    header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 30px; }
+    .brand { display: flex; align-items: center; gap: 12px; font-weight: 650; font-size: 21px; letter-spacing: -.5px; }
+    .logo { width: 34px; height: 34px; border-radius: 10px; background: #294d3c; color: #fff; display: grid; place-items: center; }
+    .subtitle { font-size: 12px; letter-spacing: .05em; color: #79847d; }
+    main { display: grid; grid-template-columns: minmax(0, 1.28fr) minmax(360px, 1fr); gap: 32px; }
+    .source { padding-top: 8px; }
+    .eyebrow { text-transform: uppercase; letter-spacing: .15em; color: #738173; font-size: 11px; font-weight: 650; }
+    h1 { font-family: Georgia, serif; font-size: 40px; font-weight: 400; line-height: 1.1; letter-spacing: -1.5px; margin: 12px 0 12px; }
+    .intro { font-size: 14px; color: #7b847c; margin: 0 0 24px; }
+    .trip { background: white; border-radius: 18px; overflow: hidden; box-shadow: 0 12px 35px #3242310a; border: 1px solid #e1e6dc; }
+    .landscape { display: block; width: 100%; height: 270px; object-fit: cover; }
+    .trip-content { padding: 22px 26px 24px; }
+    .trip-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    h2 { font-family: Georgia, serif; font-weight: 400; font-size: 27px; letter-spacing: -.7px; margin: 0; }
+    .tag { font-size: 10px; white-space: nowrap; padding: 7px 10px; border-radius: 20px; background: #eff3e8; color: #6f8258; letter-spacing: .07em; text-transform: uppercase; }
+    .details { color: #7e887f; font-size: 12px; margin-top: 11px; }
+    .divider { height: 1px; background: #edf0e9; margin: 20px 0 17px; }
+    .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+    .stat-label { font-size: 10px; text-transform: uppercase; letter-spacing: .12em; color: #929b91; margin-bottom: 7px; }
+    .stat-value { font-size: 13px; font-weight: 550; }
+    .source-footer { display: flex; align-items: center; gap: 8px; margin: 20px 0; color: #8b9489; font-size: 11px; }
+    .dot { width: 5px; height: 5px; border-radius: 50%; background: #a5b392; }
+    .chat { display: flex; flex-direction: column; background: #fff; border: 1px solid #e1e6dc; border-radius: 18px; min-height: 568px; box-shadow: 0 12px 35px #3242310a; }
+    .chat-header { display: flex; align-items: center; gap: 11px; border-bottom: 1px solid #edf0e9; padding: 19px 22px; }
+    .avatar { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: #eee9df; font-family: Georgia, serif; color: #8c7955; font-size: 16px; }
+    .chat-name { font-size: 13px; font-weight: 650; margin-bottom: 4px; }
+    .chat-meta { font-size: 10px; color: #90998f; }
+    .chat-body { flex: 1; padding: 30px 24px 20px; }
+    .date { font-size: 10px; color: #a6ada3; text-align: center; margin-bottom: 25px; }
+    .message { font-size: 13px; line-height: 1.6; max-width: 90%; padding: 13px 16px; border-radius: 14px; background: #f2f4ee; margin-bottom: 18px; }
+    .message.mine { margin-left: auto; background: #eaf0e4; }
+    .sender { font-size: 10px; font-weight: 600; color: #8b9787; margin-bottom: 5px; }
+    .composer { margin: 0 18px 18px; border: 1.5px dashed #c9d3c0; border-radius: 13px; padding: 18px; background: #fafbf7; transition: .15s ease; min-height: 124px; position: relative; }
+    .composer.dragging { border-color: #456c48; background: #eaf3e5; box-shadow: 0 0 0 4px #6b9a5620; }
+    .placeholder { color: #8d9986; font-size: 13px; margin-bottom: 22px; }
+    .composer-bottom { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+    .hint { font-size: 10px; color: #9ba492; }
+    .send { border: 0; border-radius: 9px; width: 29px; height: 29px; background: #dce5d4; color: #7b8f6b; font-size: 17px; cursor: default; }
+    .preview { display: none; margin-bottom: 14px; gap: 12px; align-items: center; }
+    .preview.visible { display: flex; }
+    .preview img { width: 102px; height: 76px; border-radius: 7px; object-fit: cover; border: 1px solid #d9e2d1; }
+    .filename { font-size: 11px; overflow-wrap: anywhere; color: #6a7c60; }
+    .attached { font-size: 12px; font-weight: 600; margin-bottom: 5px; }
+    .remove { padding: 0; border: 0; background: none; font-size: 10px; color: #929c8b; margin-top: 8px; text-decoration: underline; }
+    .footer { margin-top: 26px; display: flex; justify-content: space-between; color: #a0a799; font-size: 10px; }
+    @media (max-width: 1000px) { .shell { padding: 25px 28px; } main { gap: 22px; grid-template-columns: minmax(0, 1.15fr) minmax(300px, 1fr); } h1 { font-size: 34px; } .landscape { height: 230px; } .trip-content { padding: 20px; } h2 { font-size: 23px; } .chat { min-height: 530px; } }
+    @media (max-width: 700px) { main { grid-template-columns: 1fr; } .shell { padding: 24px; } .chat { min-height: 480px; } }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header><div class="brand"><span class="logo">↗</span> Weekend notes</div><span class="subtitle">CLIPLINE · LOCAL DEMO</span></header>
+    <main>
+      <section class="source">
+        <div class="eyebrow">A little room to roam</div>
+        <h1>Somewhere quieter.</h1>
+        <p class="intro">One good trail, a lakeside picnic, and no particular hurry.</p>
+        <article class="trip" id="capture-card">
+          <svg class="landscape" viewBox="0 0 720 330" role="img" aria-label="Illustrated alpine lake and mountains">
+            <defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="#c7ded9"/><stop offset="1" stop-color="#eef0cf"/></linearGradient><linearGradient id="water" x2="0" y2="1"><stop stop-color="#80b7ab"/><stop offset="1" stop-color="#a2c8b1"/></linearGradient></defs>
+            <rect width="720" height="330" fill="url(#sky)"/><circle cx="590" cy="66" r="29" fill="#f8edc5"/>
+            <path d="M0 190 110 89 186 157 299 32 409 148 486 83 598 176 665 122 720 167V280H0Z" fill="#9eaea1"/>
+            <path d="m229 103 70-71 82 87-49-27-25 13-20-24-19 28Z" fill="#edf0de"/>
+            <path d="M0 246 124 166 225 229 387 119 533 228 624 165 720 219V330H0Z" fill="#668a77"/>
+            <path d="M0 258Q180 243 337 255T720 252V330H0Z" fill="url(#water)"/>
+            <path d="M281 270h153m-201 16h80m187-6h85m-270 24h130m-30 15h90" stroke="#d5dfbb" stroke-width="2" opacity=".6"/>
+            <path d="M0 310Q98 253 178 275T277 330H0Z" fill="#385d49"/><path d="M567 330Q656 263 720 280V330Z" fill="#446651"/>
+            <g fill="#2d5343"><path d="m45 183-25 81h50Z"/><path d="m82 213-20 62h40Z"/><path d="m662 192-26 91h52Z"/><path d="m697 225-21 66h42Z"/></g>
+            <g fill="#e6d59c"><circle cx="122" cy="305" r="2"/><circle cx="151" cy="312" r="2"/><circle cx="74" cy="315" r="2"/></g>
+          </svg>
+          <div class="trip-content">
+            <div class="trip-title"><h2>The alpine lake loop</h2><span class="tag">Saturday idea</span></div>
+            <div class="details">A fictional weekend escape · Illustrated route inspiration</div>
+            <div class="divider"></div>
+            <div class="stats"><div><div class="stat-label">Distance</div><div class="stat-value">6.4 km loop</div></div><div><div class="stat-label">Pace</div><div class="stat-value">Take it slow</div></div><div><div class="stat-label">Bring</div><div class="stat-value">Coffee + a camera</div></div></div>
+          </div>
+        </article>
+        <div class="source-footer"><span class="dot"></span> Saved to the weekend list</div>
+      </section>
+      <section class="chat" aria-label="Local demo chat">
+        <div class="chat-header"><span class="avatar">J</span><div><div class="chat-name">Jamie</div><div class="chat-meta">Weekend plans · sample conversation</div></div></div>
+        <div class="chat-body"><div class="date">TODAY, 10:24</div><div class="message"><div class="sender">Jamie</div>Found anything for Saturday? Somewhere with a view would be lovely.</div><div class="message mine">I have just the place in mind.</div><div class="message"><div class="sender">Jamie</div>Show me 👀</div></div>
+        <div class="composer" id="drop-zone" tabindex="0" aria-label="Drop a screenshot here">
+          <div class="placeholder" id="placeholder">Drop a screenshot here…</div>
+          <div class="preview" id="preview"><img id="preview-image" alt="Dropped screenshot preview"><div><div class="attached">Screenshot attached</div><div class="filename" id="filename"></div><button class="remove" id="remove" type="button">Remove</button></div></div>
+          <div class="composer-bottom"><span class="hint" id="status" aria-live="polite">Files stay on this device</span><button class="send" type="button" disabled aria-label="Sending disabled in local demo">↑</button></div>
+        </div>
+      </section>
+    </main>
+    <div class="footer"><span>Synthetic scene · no account, no network requests</span><span>Capture → Clipline → drop</span></div>
+  </div>
+  <script>
+    const zone = document.getElementById('drop-zone');
+    const preview = document.getElementById('preview');
+    const placeholder = document.getElementById('placeholder');
+    const status = document.getElementById('status');
+    const previewImage = document.getElementById('preview-image');
+    let previewURL;
+    let dragDepth = 0;
+    function reset() {
+      if (previewURL) URL.revokeObjectURL(previewURL);
+      previewURL = undefined; previewImage.removeAttribute('src');
+      preview.classList.remove('visible'); placeholder.style.display = '';
+      status.textContent = 'Files stay on this device';
+    }
+    zone.addEventListener('dragenter', event => { event.preventDefault(); dragDepth++; zone.classList.add('dragging'); });
+    zone.addEventListener('dragover', event => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; });
+    zone.addEventListener('dragleave', event => { event.preventDefault(); if (--dragDepth <= 0) { dragDepth = 0; zone.classList.remove('dragging'); } });
+    zone.addEventListener('drop', event => {
+      event.preventDefault(); dragDepth = 0; zone.classList.remove('dragging');
+      const file = Array.from(event.dataTransfer.files).find(candidate => candidate.type.startsWith('image/'));
+      if (!file) { status.textContent = 'Drop a PNG or JPEG screenshot'; return; }
+      reset(); previewURL = URL.createObjectURL(file); previewImage.src = previewURL;
+      document.getElementById('filename').textContent = file.name;
+      placeholder.style.display = 'none'; preview.classList.add('visible');
+      status.textContent = 'Ready to share · local preview only';
+    });
+    document.getElementById('remove').addEventListener('click', reset);
+    // Prevent navigating away when a file is dropped outside the composer.
+    document.addEventListener('dragover', event => event.preventDefault());
+    document.addEventListener('drop', event => event.preventDefault());
+  </script>
+</body>
+</html>

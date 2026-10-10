@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// One photo with its clothespin. All the charm lives here: it drops onto
+/// One clipboard card with its clothespin. All the charm lives here: it drops onto
 /// the line, swings, sways with the breeze and falls when you pull it off.
 struct PeggedView: View {
     let item: Pegged
@@ -33,80 +33,146 @@ struct PeggedView: View {
         .onChange(of: copied) { _, isCopied in if isCopied { nudge(3) } }
     }
 
-    /// The photo fits inside the card area keeping its proportions, so the
-    /// white border hugs it whether the screenshot is wide or tall.
-    static func photoSize(for size: CGSize) -> CGSize {
-        let maxW = Layout.cardWidth - 14, maxH: CGFloat = 156
-        guard size.width > 0, size.height > 0 else { return CGSize(width: maxW, height: maxH) }
-        let scale = min(maxW / size.width, maxH / size.height)
-        return CGSize(width: size.width * scale, height: size.height * scale)
-    }
-
-    /// The card around the photo: the photo plus the glass inset.
-    static func cardSize(for size: CGSize) -> CGSize {
-        let p = photoSize(for: size)
-        return CGSize(width: p.width + Frame.inset * 2, height: p.height + Frame.inset * 2)
-    }
-
-    /// Distance from the top of the hanging view (the clip) to the card.
+    /// A consistent silhouette keeps wide captures readable and mixed
+    /// clipboard content aligned, without cropping the original image.
+    static let cardSize = CGSize(width: Layout.cardWidth, height: 182)
     static let cardOffsetBelowTop: CGFloat = 26 - 12
 
-    private var photoSize: CGSize { Self.photoSize(for: item.thumb.size) }
+    private var symbol: String {
+        switch item.kind {
+        case .image: return "photo"
+        case .text: return "text.alignleft"
+        case .link: return "link"
+        case .file: return "doc"
+        }
+    }
+
+    private var typeName: String {
+        switch item.kind {
+        case .image: return L("Image", "Imagen")
+        case .text: return L("Text", "Texto")
+        case .link: return L("Link", "Enlace")
+        case .file: return L("File", "Archivo")
+        }
+    }
+
+    private var tint: Color {
+        switch item.kind {
+        case .image: return .teal
+        case .text: return .orange
+        case .link: return .blue
+        case .file: return .purple
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch item.kind {
+        case .image:
+            Image(nsImage: item.thumb)
+                .resizable()
+                .interpolation(.high)
+                .scaledToFit()
+                .padding(3)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .text:
+            Text(item.previewText ?? item.title)
+                .font(.system(size: 13))
+                .lineSpacing(3)
+                .lineLimit(6)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(.horizontal, 14)
+                .padding(.top, 16)
+                .padding(.bottom, 8)
+        case .link:
+            VStack(alignment: .leading, spacing: 10) {
+                Image(systemName: "link")
+                    .font(.system(size: 22, weight: .medium))
+                    .foregroundStyle(tint)
+                Text(item.linkURL?.host ?? item.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .lineLimit(2)
+                Text(item.linkURL?.absoluteString ?? item.title)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+            .padding(15)
+        case .file:
+            VStack(spacing: 8) {
+                Image(nsImage: item.thumb).resizable().scaledToFit().frame(width: 46, height: 46)
+                Text(item.title)
+                    .font(.system(size: 13, weight: .medium))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
+                Text(item.subtitle)
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(12)
+        }
+    }
 
     private var card: some View {
-        Image(nsImage: item.thumb)
-            .resizable()
-            .interpolation(.high)
-            .frame(width: photoSize.width, height: photoSize.height)
-            // Concentric corners: the photo's radius is the frame's minus the
-            // inset, the way macOS rounds nested shapes.
-            .clipShape(RoundedRectangle(cornerRadius: Frame.radius - Frame.inset, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: Frame.radius - Frame.inset, style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
-            )
-            .padding(Frame.inset)
-            .glassFrame(cornerRadius: Frame.radius)
-            .shadow(color: .black.opacity(hovering ? 0.26 : 0.18), radius: hovering ? 14 : 10, y: hovering ? 8 : 5)
-            // Holding presses the photo in slowly, so a long press feels like
-            // it is building up to something.
-            .scaleEffect(pressed ? 0.95 : (hovering ? 1.035 : 1), anchor: .top)
-            .animation(pressed ? .easeInOut(duration: 0.45) : .spring(response: 0.3, dampingFraction: 0.6), value: pressed)
-            .opacity(dragging ? 0.45 : 1)
-            .overlay(alignment: .topLeading) {
-                // Drawn here, clicked through GrabView, which sits on top.
-                Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.primary)
-                    .frame(width: 20, height: 20)
-                    .glassFrame(circle: true)
-                    .padding(3)
-                    .opacity(hovering && !dragging ? 1 : 0)
-                    .scaleEffect(hovering ? 1 : 0.6)
-                    .allowsHitTesting(false)
+        VStack(spacing: 0) {
+            content
+                .frame(height: 142)
+                .frame(maxWidth: .infinity)
+                .background(tint.opacity(item.kind == .image ? 0.035 : 0.06))
+                .background(Color(nsColor: .controlBackgroundColor))
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+            HStack(spacing: 5) {
+                Image(systemName: symbol).foregroundStyle(tint)
+                Text(typeName).fontWeight(.medium)
+                Spacer(minLength: 4)
+                Text(item.kind == .image ? item.title : L("Click to open", "Clic para abrir"))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            .overlay(GrabArea(item: item, line: line))
-            .overlay(alignment: .bottom) {
-                if copied {
-                    Label(L("Copied", "Copiado"), systemImage: "checkmark")
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .glassFrame(capsule: true)
-                        .offset(y: 16)
-                        .transition(.opacity.combined(with: .offset(y: -4)))
-                }
+            .font(.system(size: 10))
+            .padding(.horizontal, 7)
+            .frame(height: 32)
+        }
+        .padding(Frame.inset)
+        .frame(width: Self.cardSize.width, height: Self.cardSize.height)
+        .glassFrame(cornerRadius: Frame.radius)
+        .shadow(color: .black.opacity(hovering ? 0.26 : 0.18), radius: hovering ? 14 : 10, y: hovering ? 8 : 5)
+        .scaleEffect(pressed ? 0.97 : (hovering ? 1.025 : 1), anchor: .top)
+        .animation(pressed ? .easeInOut(duration: 0.45) : .spring(response: 0.3, dampingFraction: 0.6), value: pressed)
+        .opacity(dragging ? 0.45 : 1)
+        .overlay(alignment: .topLeading) {
+            Image(systemName: "xmark")
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(.primary)
+                .frame(width: 20, height: 20)
+                .glassFrame(circle: true)
+                .padding(3)
+                .opacity(hovering && !dragging ? 1 : 0)
+                .allowsHitTesting(false)
+        }
+        .overlay(GrabArea(item: item, line: line))
+        .overlay(alignment: .bottom) {
+            if copied {
+                Label(L("Copied", "Copiado"), systemImage: "checkmark")
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .glassFrame(capsule: true)
+                    .offset(y: 16)
+                    .transition(.opacity)
             }
-            .animation(.easeOut(duration: 0.18), value: hovering)
-            .animation(.easeOut(duration: 0.2), value: copied)
-            .onHover { hovering = $0 }
-            .background(
-                GeometryReader { g in
-                    Color.clear.preference(key: HitRectsKey.self,
-                                           value: item.falling ? [:] : [item.id: g.frame(in: .global)])
-                }
-            )
+        }
+        .animation(.easeOut(duration: 0.18), value: hovering)
+        .animation(.easeOut(duration: 0.2), value: copied)
+        .onHover { hovering = $0 }
+        .background(GeometryReader { g in
+            Color.clear.preference(key: HitRectsKey.self,
+                                   value: item.falling ? [:] : [item.id: g.frame(in: .global)])
+        })
     }
 
     private func arrive() {
