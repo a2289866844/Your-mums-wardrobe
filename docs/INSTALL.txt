@@ -1,10 +1,12 @@
-Clipline 1.1.1 — macOS 14+ / Apple Silicon and Intel
+Clipline 1.1.2 — macOS 14+ / Apple Silicon and Intel
 
 安裝：把 Clipline.app 拖到 Applications，再啟動。
 首次啟動如被 macOS 阻擋：系統設定 → 隱私權與安全性 → Clipline → 強制打開（Open Anyway）。
 這個分享版使用 ad-hoc 簽章，未經 Apple 公證。
 
 選單列迴紋針：開啟設定；Control + Option + T：顯示／隱藏。
+首次啟動 1.1.2 時，若截圖原本存到桌面，會自動建立「桌面／截圖」資料夾（非中文系統為 Screenshots），之後截圖直接存入。
+已有自訂儲存位置會沿用；舊截圖不搬動。退出 Clipline 後，這個資料夾設定仍保留。
 單擊卡片：開啟。右鍵 Copy：複製。長按圖片：Markup；其他卡片沒有長按操作。
 拖曳圖片與檔案以檔案傳遞，文字以完整文字傳遞，連結以 URL 傳遞。
 文字卡片只顯示摘要；複製與拖曳不截短全文。卡片高度一致，圖片完整縮放而不裁切。

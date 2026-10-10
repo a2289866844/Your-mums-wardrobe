@@ -65,7 +65,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateCapacity()
         line.onCapture = { [weak self] in self?.captureAdded() }
 
-        if screenshotFolder == nil, Inbox.isEnabled { Inbox.apply() }
+        if screenshotFolder == nil {
+            if Inbox.isEnabled { Inbox.apply() }
+            else { prepareScreenshotFolder() }
+        }
         restoreSettingsOnTermination()
         startWatcher()
         setClipboardEnabled(clipboardEnabled)
@@ -128,6 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         clipboardWatcher?.stop()
         if screenshotFolder == nil, Inbox.isEnabled { Inbox.restore() }
+        prepareScreenshotFolder()
     }
 
     private func setClipboardEnabled(_ enabled: Bool) {
@@ -143,6 +147,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     // MARK: Inbox mode
+
+    private func prepareScreenshotFolder() {
+        guard screenshotFolder == nil else { return }
+        do { try ScreenshotLocation.prepare() }
+        catch {
+            log.error("Could not prepare the Desktop screenshot folder: \(error.localizedDescription, privacy: .private)")
+        }
+    }
 
     private func startWatcher() {
         watcher?.stop()
@@ -169,7 +181,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func setInbox(_ on: Bool) {
         guard screenshotFolder == nil else { return }
         Inbox.isEnabled = on
-        if on { Inbox.apply() } else { Inbox.restore() }
+        if on { Inbox.apply() }
+        else {
+            Inbox.restore()
+            prepareScreenshotFolder()
+        }
         startWatcher()
     }
 
@@ -198,6 +214,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             source.setEventHandler { [weak self] in
                 if self?.screenshotFolder == nil, Inbox.isEnabled { Inbox.restore() }
+                self?.prepareScreenshotFolder()
                 exit(0)
             }
             source.resume()

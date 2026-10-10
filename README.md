@@ -8,10 +8,12 @@
 
 ## 安裝與使用
 
-1. 在 Releases 下載 `Clipline-1.1.1-universal.dmg`。
+1. 在 Releases 下載 `Clipline-1.1.2-universal.dmg`。
 2. 打開磁碟映像，把 `Clipline.app` 拖到 `Applications`，再啟動。
 3. 如果 macOS 阻擋開啟，到「系統設定 → 隱私權與安全性」，找到 Clipline 的提示並按「強制打開 / Open Anyway」。這個分享版採用 ad-hoc 簽章，未經 Apple 公證；[Apple 開啟說明](https://support.apple.com/guide/mac-help/mh40616/mac)。
 4. 依 macOS 提示允許存取截圖所在資料夾。頂端選單列的迴紋針是 Clipline。
+
+1.1.2 起，首次設定時若截圖原本存到桌面，Clipline 會自動建立 **桌面／截圖** 資料夾（非中文系統為 **Screenshots**），讓新截圖直接存入，退出 App 後仍保留這個設定。已有自訂儲存位置會沿用；之後手動改變位置也會尊重你的選擇。舊截圖不搬動，從浮層移除這個資料夾的卡片也不會刪除原檔案。
 
 按 **Control + Option + T** 顯示或隱藏浮層。**單擊卡片開啟內容**；要複製，請按右鍵選 **Copy**。拖到其他 App 可分享：圖片與檔案以檔案傳遞，文字以完整文字傳遞，連結以 URL 傳遞。文字卡片只顯示摘要，複製與拖曳保留全文。圖片或檔案拖到資料夾時，目的地可選擇移動；完成移動後卡片從浮層移除。
 
