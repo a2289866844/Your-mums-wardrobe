@@ -1,12 +1,14 @@
 import Foundation
+import ImageIO
 
 /// Watches the folder macOS saves screenshots to and reports new ones.
 /// Clipline never takes screenshots itself: you keep your usual shortcut
 /// (or CleanShot, or anything else) and the line just picks them up.
 final class ScreenshotWatcher {
     let folder: URL
-    /// On the Desktop we only accept real screenshots, tagged by macOS with an
-    /// extended attribute. In a dedicated folder, any image counts.
+    /// On the Desktop we only accept images with screenshot metadata, either
+    /// the macOS extended attribute or EXIF comment. In a dedicated folder,
+    /// any image counts.
     private let onlyTaggedScreenshots: Bool
     private var known = Set<String>()
     private var source: DispatchSourceFileSystemObject?
@@ -21,11 +23,13 @@ final class ScreenshotWatcher {
     static let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
 
     /// Watches the folder macOS saves screenshots to, or a given folder.
-    init(folder: URL? = nil, onNew: @escaping (URL) -> Bool, onChange: @escaping () -> Void) {
+    init(folder: URL? = nil, onlyTaggedScreenshots: Bool? = nil,
+         onNew: @escaping (URL) -> Bool, onChange: @escaping () -> Void) {
         self.onNew = onNew
         self.onChange = onChange
         self.folder = folder ?? Self.screenshotFolder()
-        onlyTaggedScreenshots = self.folder.standardizedFileURL.path == Self.desktop.standardizedFileURL.path
+        self.onlyTaggedScreenshots = onlyTaggedScreenshots
+            ?? (self.folder.standardizedFileURL.path == Self.desktop.standardizedFileURL.path)
     }
 
     static func screenshotFolder() -> URL {
@@ -88,7 +92,7 @@ final class ScreenshotWatcher {
         let fd = open(url.path, O_EVTONLY)
         guard fd >= 0 else { return }
         let incomplete = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main)
+            fileDescriptor: fd, eventMask: [.write, .attrib, .rename, .delete], queue: .main)
         incomplete.setEventHandler { [weak self] in
             guard let self else { return }
             self.incompleteSources.removeValue(forKey: url.path)?.cancel()
@@ -118,7 +122,14 @@ final class ScreenshotWatcher {
         }
         var needsRetry = false
         for url in files where !known.contains(url.path) {
-            if !isCandidate(url) { continue }
+            guard Self.imageExtensions.contains(url.pathExtension.lowercased()) else { continue }
+            if onlyTaggedScreenshots, !isScreenCapture(url) {
+                // Screenshot metadata can arrive after the image itself. Poll
+                // briefly without keeping a file descriptor for every ordinary
+                // image added to the Desktop.
+                if retryNeeded(url) { needsRetry = true }
+                continue
+            }
             if onNew(url) {
                 known.insert(url.path)
                 retryCounts[url.path] = nil
@@ -130,9 +141,7 @@ final class ScreenshotWatcher {
                 // A file may exist before it can be decoded. Do not mark it
                 // handled until the line actually accepted it. Bound retries
                 // for a damaged image; a later file event starts another try.
-                let attempts = (retryCounts[url.path] ?? 0) + 1
-                retryCounts[url.path] = attempts
-                if attempts < 10 { needsRetry = true }
+                if retryNeeded(url) { needsRetry = true }
             }
         }
         onChange()
@@ -149,15 +158,24 @@ final class ScreenshotWatcher {
         (try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? .distantPast
     }
 
-    private func isCandidate(_ url: URL) -> Bool {
-        guard Self.imageExtensions.contains(url.pathExtension.lowercased()) else { return false }
-        return onlyTaggedScreenshots ? isScreenCapture(url) : true
+    private func retryNeeded(_ url: URL) -> Bool {
+        let attempts = (retryCounts[url.path] ?? 0) + 1
+        retryCounts[url.path] = attempts
+        return attempts < 10
     }
 
     private func isScreenCapture(_ url: URL) -> Bool {
-        url.withUnsafeFileSystemRepresentation { path in
+        let tagged = url.withUnsafeFileSystemRepresentation { path in
             guard let path else { return false }
             return getxattr(path, "com.apple.metadata:kMDItemIsScreenCapture", nil, 0, 0, 0) >= 0
         }
+        if tagged { return true }
+        // Current macOS captures may carry this EXIF marker without the
+        // Spotlight extended attribute. ImageIO reads metadata without decoding
+        // the image, and ordinary images still need an explicit capture marker.
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [String: Any],
+              let exif = properties[kCGImagePropertyExifDictionary as String] as? [String: Any] else { return false }
+        return exif[kCGImagePropertyExifUserComment as String] as? String == "Screenshot"
     }
 }

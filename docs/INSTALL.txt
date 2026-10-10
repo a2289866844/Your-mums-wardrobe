@@ -1,4 +1,4 @@
-Clipline 1.1.0 — macOS 14+ / Apple Silicon and Intel
+Clipline 1.1.1 — macOS 14+ / Apple Silicon and Intel
 
 安裝：把 Clipline.app 拖到 Applications，再啟動。
 首次啟動如被 macOS 阻擋：系統設定 → 隱私權與安全性 → Clipline → 強制打開（Open Anyway）。
@@ -21,6 +21,8 @@ Hang copied items 預設開啟：收集新複製的圖片、純文字、HTTP(S) 
 滑鼠召喚後，離開螢幕頂部三分之一會立即收起。
 手動召喚後，滑鼠進入浮層再離開，5 秒後收起。
 接管截圖位置是自選功能；啟用後，截圖存於 ~/Library/Application Support/Clipline/Screenshots。
+若截圖要等右下角 macOS 縮圖消失才加入，按 Command + Shift + 5 → 選項，取消「顯示浮動縮圖」。
+這可保留原本儲存位置並避免檔案延後寫入；Clipline 自己的新內容預覽仍維持 3 秒。
 這個截圖收件匣中的截圖按叉會送到垃圾桶；外部檔案參照按叉只移除卡片，保留原檔案。
 
 下載、原始碼與說明：https://github.com/a2289866844/clipline

@@ -8,7 +8,7 @@
 
 ## 安裝與使用
 
-1. 在 Releases 下載 `Clipline-1.1.0-universal.dmg`。
+1. 在 Releases 下載 `Clipline-1.1.1-universal.dmg`。
 2. 打開磁碟映像，把 `Clipline.app` 拖到 `Applications`，再啟動。
 3. 如果 macOS 阻擋開啟，到「系統設定 → 隱私權與安全性」，找到 Clipline 的提示並按「強制打開 / Open Anyway」。這個分享版採用 ad-hoc 簽章，未經 Apple 公證；[Apple 開啟說明](https://support.apple.com/guide/mac-help/mh40616/mac)。
 4. 依 macOS 提示允許存取截圖所在資料夾。頂端選單列的迴紋針是 Clipline。
@@ -23,6 +23,8 @@
 
 啟用 **Handle screenshots** 會把新截圖存到 `~/Library/Application Support/Clipline/Screenshots`，並關閉 macOS 浮動縮圖；關閉該選項或正常退出時恢復先前設定。接管模式下，圖片角落的叉會將其檔案送到垃圾桶。請避免和其他會接管截圖設定的工具同時啟用這項功能。
 
+如果保留 macOS「顯示浮動縮圖」，截圖可能要等右下角縮圖消失、檔案存妥後才出現在 Clipline。要保留原本的儲存位置又立即顯示，按 **Command + Shift + 5 → 選項**，取消 **顯示浮動縮圖**；Clipline 自己的新內容預覽仍維持 3 秒。
+
 ## 這個版本的操作規則
 
 - 熱區停留約 **0.08 秒**即可召喚，彈出動畫更快，熱區也稍微放寬。
@@ -32,6 +34,7 @@
 - 切換 App 或桌面不重置收起倒數，支援全螢幕 Space。
 - 圖片卡片加大，並修正頂部邊界反覆彈出與收起的問題。長按圖片可開啟 Markup；其他類型沒有長按操作。
 - 修正截圖列滿載時新截圖不自動顯示、重啟時列表被截短，以及未寫完的圖片被永久漏掉等問題。
+- 1.1.1 修正桌面截圖缺少 macOS 延伸屬性時被略過的問題，亦辨識圖片內的截圖標記；一般桌面圖片仍不會自動加入。
 
 ## 從原始碼構建
 
