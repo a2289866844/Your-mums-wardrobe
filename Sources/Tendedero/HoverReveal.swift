@@ -1,5 +1,34 @@
 import Foundation
 
+/// A small top-center entrance, independent of the larger keep-open region.
+enum HoverTrigger {
+    static func region(on screen: CGRect, menuBarHeight: CGFloat,
+                       topLeftArea: CGRect? = nil, topRightArea: CGRect? = nil) -> CGRect {
+        let fallbackWidth = min(180, screen.width)
+        var minX = screen.midX - fallbackWidth / 2
+        var maxX = minX + fallbackWidth
+        if let left = topLeftArea, let right = topRightArea {
+            let gap = right.minX - left.maxX
+            // The auxiliary areas flank a real camera housing. Ignore missing
+            // or inconsistent geometry instead of turning the whole bar hot.
+            if gap > 0, gap <= screen.width / 3,
+               left.maxX >= screen.minX, right.minX <= screen.maxX,
+               left.maxX <= screen.midX, right.minX >= screen.midX {
+                minX = left.maxX
+                maxX = right.minX
+            }
+        }
+        // A small lip below the menu bar makes the notch easy to reach.
+        let height = min(screen.height, max(1, menuBarHeight) + 6)
+        return CGRect(x: minX, y: screen.maxY - height, width: maxX - minX, height: height)
+    }
+
+    static func contains(_ pointer: CGPoint, in region: CGRect) -> Bool {
+        pointer.x >= region.minX && pointer.x < region.maxX
+            && pointer.y >= region.minY && pointer.y <= region.maxY
+    }
+}
+
 /// A hover reveal stays open anywhere in the upper third of its display.
 /// Other reveal modes do not inherit this pointer-based dismissal rule.
 struct HoverReveal {

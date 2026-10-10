@@ -451,15 +451,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let screenUnderPointer = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) }
         let inMenuBar = screenUnderPointer.map { Self.menuBarBand(of: $0).contains(mouse) } ?? false
         let inRevealZone = screenUnderPointer.map {
-            Self.menuBarBand(of: $0).insetBy(dx: 0, dy: -6).contains(mouse)
+            let region = HoverTrigger.region(on: $0.frame,
+                                             menuBarHeight: Self.menuBarBand(of: $0).height,
+                                             topLeftArea: $0.auxiliaryTopLeftArea,
+                                             topRightArea: $0.auxiliaryTopRightArea)
+            return HoverTrigger.contains(mouse, in: region)
         } ?? false
         if !inRevealZone { hoverBlockedUntilExit = false }
         if !inMenuBar { menuBarSuppressed = false }
 
         guard isRevealed else {
-            // Resting in the menu bar brings the line down on that screen.
-            // Pushing against the top edge is part of it, and it also works
-            // when another display sits above and the pointer never stops.
+            // Only the notch (or a small top-center area without a notch)
+            // brings the line down. The rest of the menu bar stays ordinary.
             if let screen = screenUnderPointer, inRevealZone, !menuBarSuppressed, !hoverBlockedUntilExit {
                 let since = hotZoneSince ?? now
                 hotZoneSince = since

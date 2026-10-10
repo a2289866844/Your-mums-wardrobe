@@ -1,34 +1,54 @@
-Clipline 1.1.2 — macOS 14+ / Apple Silicon and Intel
+Clipline 1.1.3 — macOS 14+ / Apple Silicon and Intel
 
-安裝：把 Clipline.app 拖到 Applications，再啟動。
-首次啟動如被 macOS 阻擋：系統設定 → 隱私權與安全性 → Clipline → 強制打開（Open Anyway）。
-這個分享版使用 ad-hoc 簽章，未經 Apple 公證。
+Install: drag Clipline.app to Applications, then launch it.
+If macOS blocks the first launch: System Settings → Privacy & Security → Clipline → Open Anyway.
+This shared build uses an ad-hoc signature and is not notarized by Apple.
 
-選單列迴紋針：開啟設定；Control + Option + T：顯示／隱藏。
-首次啟動 1.1.2 時，若截圖原本存到桌面，會自動建立「桌面／截圖」資料夾（非中文系統為 Screenshots），之後截圖直接存入。
-已有自訂儲存位置會沿用；舊截圖不搬動。退出 Clipline 後，這個資料夾設定仍保留。
-單擊卡片：開啟。右鍵 Copy：複製。長按圖片：Markup；其他卡片沒有長按操作。
-拖曳圖片與檔案以檔案傳遞，文字以完整文字傳遞，連結以 URL 傳遞。
-文字卡片只顯示摘要；複製與拖曳不截短全文。卡片高度一致，圖片完整縮放而不裁切。
+Menu-bar paperclip: open settings. Control + Option + T: show or hide the shelf.
+Since 1.1.2, if screenshots are saved directly to Desktop during initial setup,
+Clipline creates Desktop/Screenshots (named 截圖 on Chinese-language systems)
+and saves new screenshots there. Existing custom locations are preserved.
+Old screenshots are not moved. This folder setting remains after quitting Clipline.
+Click a card to open it. Right-click → Copy to copy it.
+Press and hold an image for Markup; other card types have no long-press action.
+Dragging delivers images and files as files, full text as text, and links as URLs.
+Text cards show a summary; copying and dragging preserve the full text.
+Cards have a consistent height. Images fit fully without cropping.
 
-Hang copied items 預設開啟：收集新複製的圖片、純文字、HTTP(S) 連結與檔案參照。
-支援上述內容類型；不保證保留每種 App 的所有剪貼簿格式。
-可在選單列關閉以暫停。受保護剪貼簿標記會被略過，但無法辨識所有機密資料。
-複製敏感內容前可先暫停收集。
-內容在本機保存並於重啟後還原；剪貼簿產生的內容存於：
+Hang copied items is enabled by default. It collects newly copied images,
+plain text, HTTP(S) links, and file references. These content types are supported;
+not every clipboard format from every app is preserved.
+Turn it off in the menu bar to pause collection. Protected clipboard markers
+are skipped, but Clipline cannot identify every confidential item.
+Pause collection before copying sensitive content.
+Contents are saved locally and restored after restarting. Clipboard-generated
+contents are stored in:
 ~/Library/Application Support/Clipline/Clipboard
-外部檔案保留原檔案參照。依螢幕寬度提供 3–12 個位置，滿載時最舊卡片掉落，並非無限歷史。
+External files retain references to their originals. The shelf has 3–12 slots,
+depending on screen width. When full, the oldest card drops off.
 
-新截圖或剪貼簿內容無人操作時顯示 3 秒；按住、拖曳或右鍵選單操作會延後收起。
-滑鼠召喚後，離開螢幕頂部三分之一會立即收起。
-手動召喚後，滑鼠進入浮層再離開，5 秒後收起。
-接管截圖位置是自選功能；啟用後，截圖存於 ~/Library/Application Support/Clipline/Screenshots。
-若截圖要等右下角 macOS 縮圖消失才加入，按 Command + Shift + 5 → 選項，取消「顯示浮動縮圖」。
-這可保留原本儲存位置並避免檔案延後寫入；Clipline 自己的新內容預覽仍維持 3 秒。
-這個截圖收件匣中的截圖按叉會送到垃圾桶；外部檔案參照按叉只移除卡片，保留原檔案。
+Hover reveal uses only the MacBook notch's width at the top of the display,
+derived from its hardware auxiliary-area boundaries. Displays without a notch
+use a centered 180-point top region. The hover delay is about 0.08 seconds.
+After a hover reveal, leaving the display's upper third closes the shelf immediately.
+Idle new screenshots or clipboard items preview for 3 seconds. Holding a card,
+dragging, or using a context menu postpones dismissal.
+After a manual reveal, enter the shelf and then leave it; it closes 5 seconds later.
 
-下載、原始碼與說明：https://github.com/a2289866844/clipline
-問題回報：https://github.com/a2289866844/clipline/issues
-請提供 macOS / Clipline 版本、重現步驟、預期與實際結果；分享畫面前請移除私人內容。
+Managing the screenshot location is optional. With Handle screenshots enabled,
+screenshots are saved to ~/Library/Application Support/Clipline/Screenshots.
+Clipline disables macOS floating thumbnails and restores your previous settings
+when this option is disabled or the app quits normally.
+If screenshots appear only after the bottom-right macOS thumbnail disappears,
+press Command + Shift + 5 → Options and disable Show Floating Thumbnail.
+This keeps your save location and avoids delayed file writing; Clipline's own
+new-item preview still lasts 3 seconds.
+Clicking the cross on a screenshot in the private screenshot inbox sends it to
+Trash. Removing an external file reference removes its card and preserves the file.
+
+Downloads, source, and documentation: https://github.com/a2289866844/clipline
+Bug reports: https://github.com/a2289866844/clipline/issues
+Include macOS / Clipline versions, reproduction steps, expected and actual behavior.
+Remove private content before sharing screenshots or recordings.
 Based on Tendedero by Alejandro Buján. Independent modified build, not endorsed by the original author.
 License and original attribution: LICENSE.txt and LICENSE in the repository.
