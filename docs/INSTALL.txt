@@ -53,8 +53,8 @@ new-item preview still lasts 3 seconds.
 Clicking the cross on a screenshot in the private screenshot inbox sends it to
 Trash. Removing an external file reference removes its card and preserves the file.
 
-Downloads, source, and documentation: https://github.com/a2289866844/clipline
-Bug reports: https://github.com/a2289866844/clipline/issues
+Downloads, source, and documentation: https://github.com/a2289866844/Your-mums-wardrobe
+Bug reports: https://github.com/a2289866844/Your-mums-wardrobe/issues
 Include macOS / Clipline versions, reproduction steps, expected and actual behavior.
 Remove private content before sharing screenshots or recordings.
 Based on Tendedero by Alejandro Buján. Independent modified build, not endorsed by the original author.

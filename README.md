@@ -4,7 +4,7 @@
 
 A customized macOS screenshot and clipboard shelf, based on [Alejandro Buján's Tendedero](https://github.com/alejandrobujan/tendedero) 1.0.0. Clipline is an independent modified build with its own name and icon.
 
-**[Download the installer](https://github.com/a2289866844/clipline/releases/latest)** · macOS 14 or later · Universal app for Apple Silicon and Intel
+**[Download the installer](https://github.com/a2289866844/Your-mums-wardrobe/releases/latest)** · macOS 14 or later · Universal app for Apple Silicon and Intel
 
 ## Install and use
 
@@ -47,8 +47,8 @@ If macOS **Show Floating Thumbnail** is enabled, a screenshot may appear in Clip
 Requires the macOS Swift toolchain, provided by Xcode or Command Line Tools.
 
 ```sh
-git clone --branch personal https://github.com/a2289866844/clipline.git
-cd clipline
+git clone --branch personal https://github.com/a2289866844/Your-mums-wardrobe.git
+cd Your-mums-wardrobe
 swift test
 scripts/build-app.sh
 open build/Clipline.app
@@ -64,11 +64,11 @@ Regression tests cover display-region boundaries, preview timing, capacity and r
 
 **13-second native demo: take a screenshot → Clipline shelf → drag into a chat composer.** Click the preview to watch the MP4.
 
-[![Clipline native screenshot and drag-and-drop demo](docs/media/clipline-demo.gif)](https://github.com/a2289866844/clipline/releases/download/clipline-v1.1.3/Clipline-1.1.3-demo.mp4)
+[![Clipline native screenshot and drag-and-drop demo](docs/media/clipline-demo.gif)](https://github.com/a2289866844/Your-mums-wardrobe/releases/download/clipline-v1.1.3/Clipline-1.1.3-demo.mp4)
 
 The demo uses synthetic travel content and a local chat composer that receives the actual image file through native drag and drop. Nothing is uploaded or sent over the network. The recording uses a verification build compiled from the same app sources with separate storage folders. See [the demo notes](docs/demo.md).
 
-Report problems through [GitHub Issues](https://github.com/a2289866844/clipline/issues), including your macOS and Clipline versions, steps to reproduce, expected behavior, and actual behavior. Remove private content before sharing screenshots or recordings.
+Report problems through [GitHub Issues](https://github.com/a2289866844/Your-mums-wardrobe/issues), including your macOS and Clipline versions, steps to reproduce, expected behavior, and actual behavior. Remove private content before sharing screenshots or recordings.
 
 ## Attribution and license
 
