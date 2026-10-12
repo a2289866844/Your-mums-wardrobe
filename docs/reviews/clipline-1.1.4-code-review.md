@@ -2,6 +2,8 @@
 
 審查日期：2026-10-11（America/Vancouver）。基準為 [Clipline 1.1.4](https://github.com/a2289866844/clipline/releases/tag/clipline-v1.1.4)，提交 `5877cbb890a1d80a26ee96277c2dbb876f1fe830`。已核對本機 HEAD、遠端 release tag 與 `personal` 分支一致，開始時工作目錄乾淨。修正位於 `codex/clipline-1.1.4-review`。
 
+交付版本為 [Clipline 1.1.5](https://github.com/a2289866844/clipline/releases/tag/clipline-v1.1.5)，另加入 [Preview 視窗置中](preview-window-centering.md)。以下 124 個測試與「未更新」狀態描述審查完成時的紀錄；交付版本的 130 個測試及驗證資訊見 [1.1.5 發佈說明](../releases/1.1.5.md)。
+
 ## 結果
 
 已修正截圖監控、剪貼簿隱私、檔案所有權與生命週期、設定還原、Markup 回寫及原生互動的問題。原版 65 個測試通過仍不足以涵蓋這些邊界；新增重現測試並保留原有測試。以下按相關失敗情境分組，並非每一列都代表單一獨立 bug。

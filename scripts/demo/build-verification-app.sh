@@ -54,7 +54,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>io.github.a2289866844.clipline.verification</string>
 <key>CFBundleName</key><string>Clipline Verification</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.1.4</string>
+<key>CFBundleShortVersionString</key><string>1.1.5</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>

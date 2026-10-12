@@ -8,7 +8,7 @@ A customized macOS screenshot and clipboard shelf, based on [Alejandro Buján's 
 
 ## Install and use
 
-1. Download `Clipline-1.1.4-universal.dmg` from Releases.
+1. Download `Clipline-1.1.5-universal.dmg` from Releases.
 2. Open the disk image, drag `Clipline.app` to `Applications`, and launch it.
 3. If macOS blocks the app, open **System Settings → Privacy & Security**, find the Clipline notice, and choose **Open Anyway**. This shared build uses an ad-hoc signature and is not notarized by Apple. See [Apple's opening instructions](https://support.apple.com/guide/mac-help/mh40616/mac).
 4. Allow access to your screenshot folder when macOS asks; an update may prompt again. The paperclip in the menu bar is Clipline.

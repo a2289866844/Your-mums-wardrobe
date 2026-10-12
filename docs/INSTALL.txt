@@ -1,4 +1,4 @@
-Clipline 1.1.4 — macOS 14+ / Apple Silicon and Intel
+Clipline 1.1.5 — macOS 14+ / Apple Silicon and Intel
 
 Install: drag Clipline.app to Applications, then launch it.
 If macOS blocks the first launch: System Settings → Privacy & Security → Clipline → Open Anyway.
@@ -13,6 +13,10 @@ Screenshot monitoring retries if folder access is temporarily unavailable and
 reconnects when the watched folder is replaced. Allow screenshot-folder access
 when macOS asks; an app update may prompt again.
 Click a card to open it. Right-click → Copy to copy it.
+Images open in macOS Preview. Enable Clipline in System Settings → Privacy &
+Security → Accessibility to center the matching image window on the display
+where you clicked, keeping its current size. After granting access, click the
+image again. Without access, the image still opens normally.
 Press and hold an image for Markup; other card types have no long-press action.
 Dragging delivers images and files as files, full text as text, and links as URLs.
 Text cards show a summary; copying and dragging preserve the full text.

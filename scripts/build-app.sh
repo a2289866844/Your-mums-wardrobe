@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 CONFIG="${1:-release}"
 APP="build/Clipline.app"
-VERSION="1.1.4"
+VERSION="1.1.5"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 build_arch() {
@@ -46,7 +46,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>CFBundleIconFile</key><string>Clipline</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$VERSION</string>
-<key>CFBundleVersion</key><string>6</string>
+<key>CFBundleVersion</key><string>7</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
