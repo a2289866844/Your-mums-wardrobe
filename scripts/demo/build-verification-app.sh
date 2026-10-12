@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT="$PWD"
-APP="$ROOT/build/Clipline Verification.app"
+APP="${1:-$ROOT/build/Clipline Verification.app}"
 mkdir -p "$ROOT/build"
 if [[ -e "$APP" ]]; then
   echo "Verification app already exists; retain it or move it before rebuilding." >&2
@@ -25,10 +25,10 @@ MainActor.assumeIsolated {
     let suite = configuration["suite"] as! String
     let defaults = UserDefaults(suiteName: suite)!
     defaults.set(true, forKey: "soundOff")
-    UserDefaults.standard.set(true, forKey: "welcomed")
-    UserDefaults.standard.set(true, forKey: "clipboardEnabled")
+    defaults.set(true, forKey: "welcomed")
+    defaults.set(false, forKey: "clipboardEnabled")
     let line = Line(defaults: defaults, clipboardFolder: runtime.appendingPathComponent("Clipboard", isDirectory: true))
-    let delegate = AppDelegate(line: line, screenshotFolder: runtime.appendingPathComponent("Screenshots", isDirectory: true))
+    let delegate = AppDelegate(line: line, screenshotFolder: runtime.appendingPathComponent("Screenshots", isDirectory: true), defaults: defaults)
     app.delegate = delegate
     app.setActivationPolicy(.accessory)
     withExtendedLifetime(delegate) { app.run() }
@@ -51,7 +51,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>io.github.a2289866844.clipline.verification</string>
 <key>CFBundleName</key><string>Clipline Verification</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.1.0</string>
+<key>CFBundleShortVersionString</key><string>1.1.4</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>

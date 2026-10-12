@@ -24,6 +24,10 @@ struct GrabArea: NSViewRepresentable {
         configure(view)
     }
 
+    static func dismantleNSView(_ view: GrabView, coordinator: ()) {
+        view.cancelPress()
+    }
+
     private func configure(_ view: GrabView) {
         let id = item.id
         let line = line
@@ -41,14 +45,18 @@ struct GrabArea: NSViewRepresentable {
             : L("Click to open. Drag to another app.", "Haz clic para abrir. Arrastra a otra app."))
         view.onDragStart = { line.draggingID = id }
         view.onDragEnd = {
-            line.draggingID = nil
+            if line.draggingID == id { line.draggingID = nil }
             // Moved into a folder: it is saved where you wanted it.
             line.prune()
         }
+        view.onMoveSettled = { line.prune() }
         view.onTrash = { line.trash(id) }
         view.onDiscard = { line.discard(id) }
         view.onLongPress = { line.markup(id) }
-        view.onPressChange = { pressed in line.pressedID = pressed ? id : nil }
+        view.onPressChange = { pressed in
+            if pressed { line.pressedID = id }
+            else if line.pressedID == id { line.pressedID = nil }
+        }
         view.menuProvider = {
             let menu = NSMenu()
             menu.addItem(ClosureMenuItem(L("Copy", "Copiar")) { line.copy(id) })
@@ -85,6 +93,7 @@ final class GrabView: NSView, NSDraggingSource {
     var onClick: () -> Void = {}
     var onDragStart: () -> Void = {}
     var onDragEnd: () -> Void = {}
+    var onMoveSettled: () -> Void = {}
     var onTrash: () -> Void = {}
     var onDiscard: () -> Void = {}
     var onLongPress: () -> Void = {}
@@ -131,14 +140,17 @@ final class GrabView: NSView, NSDraggingSource {
         didLongPress = false
         onPressChange(true)
         guard kind == .image else { return }
-        holdTimer = Timer.scheduledTimer(withTimeInterval: Self.holdDuration, repeats: false) { [weak self] _ in
+        let timer = Timer(timeInterval: Self.holdDuration, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self, self.downPoint != nil, !self.startedDrag else { return }
+                self.holdTimer = nil
                 self.didLongPress = true
-                self.onPressChange(false)
                 self.onLongPress()
+                self.onPressChange(false)
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        holdTimer = timer
     }
 
     private func endPress() {
@@ -147,10 +159,25 @@ final class GrabView: NSView, NSDraggingSource {
         onPressChange(false)
     }
 
+    /// A removed card must not keep a delayed Markup action or press protection.
+    func cancelPress() {
+        endPress()
+        downPoint = nil
+        didLongPress = false
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil { cancelPress() }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
     override func mouseDragged(with event: NSEvent) {
-        guard let start = downPoint, !startedDrag, let writer = dragPasteboardWriter() else { return }
+        guard let start = downPoint, !startedDrag, !didLongPress else { return }
         let p = event.locationInWindow
-        guard hypot(p.x - start.x, p.y - start.y) > 4, !didLongPress else { return }
+        guard hypot(p.x - start.x, p.y - start.y) > 4 else { return }
+        // A failed drag still cancels a click/hold. Read text backing files only
+        // after crossing the threshold, rather than on every pointer movement.
+        guard let writer = dragPasteboardWriter() else { cancelPress(); return }
         startedDrag = true
         // Transfer protection before releasing the press. Capacity can have
         // changed while the pointer was held, so there must be no unprotected gap.
@@ -167,7 +194,8 @@ final class GrabView: NSView, NSDraggingSource {
 
     override func mouseUp(with event: NSEvent) {
         endPress()
-        if downPoint != nil && !startedDrag && !didLongPress && event.clickCount == 1 { onClick() }
+        let releasedInside = bounds.contains(convert(event.locationInWindow, from: nil))
+        if downPoint != nil && !startedDrag && !didLongPress && event.clickCount == 1 && releasedInside { onClick() }
         downPoint = nil
         didLongPress = false
     }
@@ -196,7 +224,7 @@ final class GrabView: NSView, NSDraggingSource {
             // Card previews are deliberately shortened; dragging must retain
             // the full stored text rather than only those visible characters.
             let text: String?
-            if let url { text = try? String(contentsOf: url, encoding: .utf8) }
+            if let url { text = ClipboardStore.text(at: url) }
             else { text = previewText }
             guard let text else { return nil }
             let item = NSPasteboardItem()
@@ -226,6 +254,10 @@ final class GrabView: NSView, NSDraggingSource {
     }
 
     func draggingSession(_ session: NSDraggingSession, endedAt screenPoint: NSPoint, operation: NSDragOperation) {
+        finishDrag(operation: operation)
+    }
+
+    func finishDrag(operation: NSDragOperation) {
         GrabView.isDragging = false
         startedDrag = false
         downPoint = nil
@@ -240,7 +272,7 @@ final class GrabView: NSView, NSDraggingSource {
         // Finder finishes a move a moment later. Check again then, so a photo
         // saved into a folder leaves the line.
         if operation.contains(.move) {
-            let done = onDragEnd
+            let done = onMoveSettled
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { done() }
         }
     }

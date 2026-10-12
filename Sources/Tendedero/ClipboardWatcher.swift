@@ -44,7 +44,10 @@ final class ClipboardWatcher {
         guard count != observedCount else { return }
         if pendingCount != count { attempts = 0; pendingCount = count }
         guard !hasPrivateMarker() else { observedCount = count; attempts = 0; return }
-        let payload = readPayload()
+        // Source metadata may itself be supplied lazily and replace the copy.
+        // Recheck before requesting content from the replacement clipboard.
+        guard pasteboard.changeCount == count else { attempts = 0; return }
+        let payload = readPayload(expectedCount: count)
         // A provider can replace the clipboard while a promised type is read.
         // Never deliver mixed representations from different copy operations.
         guard pasteboard.changeCount == count else { attempts = 0; return }
@@ -73,9 +76,15 @@ final class ClipboardWatcher {
         return sources.contains { source in passwordManagers.contains { source.lowercased().hasPrefix($0) } }
     }
 
-    private func readPayload() -> ClipboardPayload? {
+    private func readPayload(expectedCount: Int) -> ClipboardPayload? {
+        guard pasteboard.changeCount == expectedCount else { return nil }
         let items = pasteboard.pasteboardItems ?? []
-        let fileValues = items.compactMap { $0.string(forType: .fileURL) }
+        var fileValues: [String] = []
+        for item in items {
+            guard pasteboard.changeCount == expectedCount else { return nil }
+            if let value = item.string(forType: .fileURL) { fileValues.append(value) }
+        }
+        guard pasteboard.changeCount == expectedCount else { return nil }
         let files = fileValues.compactMap { value -> URL? in
             guard let url = URL(string: value), url.isFileURL else { return nil }
             return url.standardizedFileURL
@@ -88,10 +97,14 @@ final class ClipboardWatcher {
         // representation for an explicitly copied screenshot.
         if (pasteboard.types ?? []).contains(.fileURL) || items.contains(where: { $0.types.contains(.fileURL) }) { return nil }
         for type in [NSPasteboard.PasteboardType.png, .tiff] {
+            guard pasteboard.changeCount == expectedCount else { return nil }
             if let data = pasteboard.data(forType: type), data.count <= ClipboardStore.imageDataLimit,
                let png = ClipboardStore.normalizedPNG(data) { return .image(png) }
         }
-        let text = pasteboard.string(forType: .string) ?? pasteboard.string(forType: .URL)
+        guard pasteboard.changeCount == expectedCount else { return nil }
+        var text = pasteboard.string(forType: .string)
+        guard pasteboard.changeCount == expectedCount else { return nil }
+        if text == nil { text = pasteboard.string(forType: .URL) }
         guard let text, !text.isEmpty, text.utf8.count <= ClipboardStore.textLimit else { return nil }
         if let url = ClipboardStore.link(in: text) { return .link(url) }
         return .text(text)

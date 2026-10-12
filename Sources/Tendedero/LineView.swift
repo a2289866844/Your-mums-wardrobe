@@ -7,6 +7,10 @@ enum Layout {
     static let cardWidth: CGFloat = 220
     static let pinAbove: CGFloat = 9.5
 
+    static func capacity(width: CGFloat) -> Int {
+        max(1, min(12, Int(max(0, width - 200) / spacing)))
+    }
+
     /// The rope hangs as a parabola from edge to edge of the screen.
     static func sag(width: CGFloat) -> CGFloat { min(30, width * 0.018) }
 
@@ -17,8 +21,12 @@ enum Layout {
     }
 
     static func x(index: Int, count: Int, width: CGFloat) -> CGFloat {
-        let total = CGFloat(max(count - 1, 0)) * spacing
-        return width / 2 - total / 2 + CGFloat(index) * spacing
+        let gaps = CGFloat(max(count - 1, 0))
+        // Held cards and falling placeholders can briefly exceed capacity.
+        // Compress only that overflow, leaving room for tilt at both edges.
+        let step = gaps > 0 ? min(spacing, max(0, width - cardWidth - 40) / gaps) : spacing
+        let total = gaps * step
+        return width / 2 - total / 2 + CGFloat(index) * step
     }
 }
 

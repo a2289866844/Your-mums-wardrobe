@@ -42,6 +42,26 @@ final class RegressionTests: XCTestCase {
         XCTAssertEqual(defaults.stringArray(forKey: "pegged"), paths)
     }
 
+
+    @MainActor
+    func testRestoredPhotosEnforceAssignedCapacityEvenWhenValueIsUnchanged() throws {
+        let folder = try temporaryFolder()
+        let paths = try (0..<12).map { index in
+            let url = folder.appendingPathComponent("capture-\(index).png")
+            try writeImage(to: url)
+            return url.path
+        }
+        let defaults = isolatedDefaults()
+        defaults.set(paths, forKey: "pegged")
+        let line = Line(defaults: defaults, clipboardFolder: folder.appendingPathComponent("Clipboard"))
+        XCTAssertEqual(line.liveCount, 12)
+        XCTAssertEqual(line.maxItems, 8)
+        line.maxItems = 8
+        XCTAssertEqual(line.liveCount, 8)
+        XCTAssertEqual(line.items.filter { !$0.falling }.map(\.url.path), Array(paths.suffix(8)))
+        XCTAssertEqual(defaults.stringArray(forKey: "pegged"), Array(paths.suffix(8)))
+    }
+
     @MainActor
     func testFullLineStillSignalsEveryNewCapture() throws {
         let folder = try temporaryFolder()

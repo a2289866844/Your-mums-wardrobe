@@ -27,7 +27,7 @@ Pause collection before copying sensitive content.
 Contents are saved locally and restored after restarting. Clipboard-generated
 contents are stored in:
 ~/Library/Application Support/Clipline/Clipboard
-External files retain references to their originals. The shelf has 3–12 slots,
+External files retain references to their originals. The shelf has 1–12 slots,
 depending on screen width. When full, the oldest card drops off.
 
 Hover reveal uses only the MacBook notch's width at the top of the display,

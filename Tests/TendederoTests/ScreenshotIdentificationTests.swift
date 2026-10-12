@@ -29,8 +29,8 @@ final class ScreenshotIdentificationTests: XCTestCase {
         try (data as Data).write(to: url)
     }
 
-    private func addScreenshotTag(to url: URL) throws {
-        let value = try PropertyListSerialization.data(fromPropertyList: true, format: .binary, options: 0)
+    private func addScreenshotTag(to url: URL, value: Any = true) throws {
+        let value = try PropertyListSerialization.data(fromPropertyList: value, format: .binary, options: 0)
         let result = value.withUnsafeBytes { bytes in
             url.withUnsafeFileSystemRepresentation { path in
                 setxattr(path!, "com.apple.metadata:kMDItemIsScreenCapture", bytes.baseAddress, bytes.count, 0, 0)
@@ -142,4 +142,52 @@ final class ScreenshotIdentificationTests: XCTestCase {
         try await Task.sleep(nanoseconds: 400_000_000)
         XCTAssertEqual(deliveries, 1)
     }
+    @MainActor
+    func testFalseScreenshotAttributeDoesNotAcceptOrdinaryImage() async throws {
+        let folder = try temporaryFolder()
+        let url = folder.appendingPathComponent("photo.png")
+        var deliveries = 0
+        let watcher = ScreenshotWatcher(folder: folder, onlyTaggedScreenshots: true,
+            onNew: { _ in deliveries += 1; return true }, onChange: {})
+        defer { watcher.stop() }
+        try writePNG(to: url)
+        try addScreenshotTag(to: url, value: false)
+        watcher.start()
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertEqual(deliveries, 0)
+    }
+
+    @MainActor
+    func testStringScreenshotAttributeIsAccepted() async throws {
+        let folder = try temporaryFolder()
+        let url = folder.appendingPathComponent("capture.png")
+        var deliveries = 0
+        let watcher = ScreenshotWatcher(folder: folder, onlyTaggedScreenshots: true,
+            onNew: { _ in deliveries += 1; return true }, onChange: {})
+        defer { watcher.stop() }
+        try writePNG(to: url)
+        try addScreenshotTag(to: url, value: "1")
+        watcher.start()
+        XCTAssertEqual(deliveries, 1)
+    }
+
+    @MainActor
+    func testDesktopSymlinkStillRequiresScreenshotMetadata() async throws {
+        let folder = try temporaryFolder()
+        let alias = folder.appendingPathComponent("Desktop Alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: ScreenshotWatcher.desktop)
+        let ordinaryImage = folder.appendingPathComponent("photo.png")
+        var deliveries = 0
+        // Keep the test outside the real Desktop: only the selected folder's
+        // classification is under test, with both I/O operations injected.
+        let watcher = ScreenshotWatcher(folder: alias,
+            openDirectory: { _ in open(folder.path, O_EVTONLY) },
+            listDirectory: { _ in [ordinaryImage] },
+            onNew: { _ in deliveries += 1; return true }, onChange: {})
+        defer { watcher.stop() }
+        try writePNG(to: ordinaryImage)
+        watcher.start()
+        XCTAssertEqual(deliveries, 0)
+    }
+
 }

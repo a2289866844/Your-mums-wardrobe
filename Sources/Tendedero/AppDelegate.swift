@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Include captures made while startup is waiting for folder permission.
     private let screenshotMonitoringStartedAt = Date()
     private let line: Line
+    private let defaults: UserDefaults
     /// Verification hosts can watch a dedicated fixture folder without
     /// reading Desktop or changing the user's screenshot preferences.
     private let screenshotFolder: URL?
@@ -20,8 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// landing on the Desktop, and they still hang on the line.
     private var safetyWatcher: ScreenshotWatcher?
     private var clipboardWatcher: ClipboardWatcher?
+    private var screenshotLocationMonitor: ScreenshotLocationMonitor?
     private var clipboardEnabled: Bool {
-        UserDefaults.standard.object(forKey: "clipboardEnabled") as? Bool ?? true
+        defaults.object(forKey: "clipboardEnabled") as? Bool ?? true
     }
     private var signalSources: [DispatchSourceSignal] = []
     private var hotKey: HotKey?
@@ -53,8 +55,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The screen a new capture was taken on: the line goes there.
     private var pendingScreen: NSScreen?
 
-    init(line: Line? = nil, screenshotFolder: URL? = nil) {
+    init(line: Line? = nil, screenshotFolder: URL? = nil, defaults: UserDefaults = .standard) {
         self.line = line ?? Line()
+        self.defaults = defaults
         self.screenshotFolder = screenshotFolder
         super.init()
     }
@@ -68,8 +71,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         line.onCapture = { [weak self] in self?.captureAdded() }
 
         if screenshotFolder == nil {
-            if Inbox.isEnabled { Inbox.apply() }
-            else { prepareScreenshotFolder() }
+            if Inbox.isEnabled { applyInbox() }
+            else { Inbox.restore(); prepareScreenshotFolder() }
         }
         restoreSettingsOnTermination()
         startWatcher(startedAt: screenshotMonitoringStartedAt)
@@ -83,6 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         watchMenuBarClicks()
 
         Markup.shared.onSaved = { [weak self] url in self?.line.reloadThumbnail(for: url) }
+        Markup.shared.onEditingChanged = { [weak self] url in self?.line.editingURL = url }
         line.onFall = { [weak self] item in self?.fall(item) }
 
         line.$items
@@ -115,8 +119,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.offerInbox() }
         }
 
-        if !UserDefaults.standard.bool(forKey: "welcomed") {
-            UserDefaults.standard.set(true, forKey: "welcomed")
+        if !defaults.bool(forKey: "welcomed") {
+            defaults.set(true, forKey: "welcomed")
             keepOpen = true
             wanted = true
             refresh()
@@ -132,12 +136,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         clipboardWatcher?.stop()
-        if screenshotFolder == nil, Inbox.isEnabled { Inbox.restore() }
+        watcher?.stop()
+        safetyWatcher?.stop()
+        screenshotLocationMonitor?.stop()
+        stopMouseTracking()
+        if screenshotFolder == nil { Inbox.restore() }
         prepareScreenshotFolder()
     }
 
     private func setClipboardEnabled(_ enabled: Bool) {
-        UserDefaults.standard.set(enabled, forKey: "clipboardEnabled")
+        defaults.set(enabled, forKey: "clipboardEnabled")
         clipboardWatcher?.stop()
         clipboardWatcher = nil
         guard enabled else { return }
@@ -158,16 +166,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func startWatcher(startedAt: Date = Date()) {
+    private func startWatcher(folder: URL? = nil, startedAt: Date = Date()) {
+        screenshotLocationMonitor?.stop()
+        screenshotLocationMonitor = nil
         watcher?.stop()
         safetyWatcher?.stop()
         safetyWatcher = nil
         watcher = ScreenshotWatcher(
-            folder: screenshotFolder,
+            folder: screenshotFolder ?? folder,
             startedAt: startedAt,
             onNew: { [weak self] url in self?.hangCapture(url) ?? false },
             onChange: { [weak self] in self?.line.prune() })
         watcher.start()
+        if screenshotFolder == nil {
+            let monitor = ScreenshotLocationMonitor(folder: watcher.folder, checkedAt: startedAt) { [weak self] folder, cutoff in
+                self?.startWatcher(folder: folder, startedAt: cutoff)
+            }
+            screenshotLocationMonitor = monitor
+            monitor.start()
+        }
         if screenshotFolder == nil, Inbox.isEnabled, watcher.folder.standardizedFileURL != ScreenshotWatcher.desktop.standardizedFileURL {
             let safety = ScreenshotWatcher(
                 folder: ScreenshotWatcher.desktop,
@@ -185,12 +202,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func setInbox(_ on: Bool) {
         guard screenshotFolder == nil else { return }
         Inbox.isEnabled = on
-        if on { Inbox.apply() }
+        if on { applyInbox() }
         else {
             Inbox.restore()
             prepareScreenshotFolder()
         }
         startWatcher()
+    }
+
+    private func applyInbox() {
+        do { try Inbox.apply() }
+        catch {
+            Inbox.restore()
+            Inbox.isEnabled = false
+            prepareScreenshotFolder()
+            log.error("Could not prepare the screenshot inbox: \(error.localizedDescription, privacy: .private)")
+            NSSound.beep()
+        }
     }
 
     /// Asked once. Changing system settings is the user's call, never ours.
@@ -217,7 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             source.setEventHandler { [weak self] in
-                if self?.screenshotFolder == nil, Inbox.isEnabled { Inbox.restore() }
+                if self?.screenshotFolder == nil { Inbox.restore() }
                 self?.prepareScreenshotFolder()
                 exit(0)
             }
@@ -287,7 +315,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             line.land(id)
             return
         }
-        CaptureFlight.fly(image: image, from: from, to: to, tilt: CGFloat(item.tilt), on: screen) { [weak self] in
+        CaptureFlight.fly(image: image, from: from, to: to, tilt: CGFloat(item.tilt), on: screen,
+                          destination: { [weak self] in self?.cardFrame(for: id) }) { [weak self] in
             self?.line.land(id)
         }
     }
@@ -543,7 +572,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// mouse while the cursor is over a photo. Everywhere else, clicks go to
     /// whatever is underneath.
     private func updateMousePassThrough(_ mouse: NSPoint) {
-        guard !GrabView.isDragging else { return }
+        guard !GrabView.isDragging, !GrabView.isPresentingMenu, line.pressedID == nil else { return }
         let local = panel.convertPoint(fromScreen: mouse)
         let flipped = CGPoint(x: local.x, y: panel.frame.height - local.y)
         let overPhoto = line.hitRects.values.contains { $0.insetBy(dx: -4, dy: -4).contains(flipped) }
@@ -553,8 +582,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func updateCapacity() {
-        let usable = panel.frame.width - 200
-        line.maxItems = max(3, min(12, Int(usable / Layout.spacing)))
+        line.maxItems = Layout.capacity(width: panel.frame.width)
     }
 
     // MARK: Menu bar

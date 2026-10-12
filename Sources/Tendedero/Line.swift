@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import Darwin
 import os
 
 let log = Logger(subsystem: "io.github.a2289866844.clipline", category: "line")
@@ -52,12 +53,41 @@ final class Line: ObservableObject {
     /// uses them to only catch clicks over photos and let the rest through.
     var hitRects: [UUID: CGRect] = [:]
 
-    var maxItems = 8
+    var maxItems = 8 {
+        didSet { enforceCapacity() }
+    }
+    /// The system editor can outlive a card interaction. Its file stays alive until dismissal.
+    var editingURL: URL? {
+        didSet { if oldValue != editingURL { interactionChanged() } }
+    }
     /// Called for each new capture, even when the line is already at capacity.
     var onCapture: (() -> Void)?
     private let defaults: UserDefaults
     private let clipboardStore: ClipboardStore
     private var dropCompletionTokens: [UUID: UUID] = [:]
+    private var originalClipboardFiles: Set<URL> = []
+    private struct ClipboardFileLease: Codable {
+        let url: URL
+        let pasteboardName: String
+        let changeCount: Int
+    }
+    private var clipboardFileLease: ClipboardFileLease?
+    private var clipboardLeaseTimer: Timer?
+    private let clipboardLeaseKey = "clipboardFileLease"
+    private struct ImageFingerprint: Equatable {
+        let size: Int64
+        let modifiedSeconds: Int
+        let modifiedNanoseconds: Int
+        let changedSeconds: Int
+        let changedNanoseconds: Int
+        let device: Int32
+        let inode: UInt64
+    }
+    private struct CachedImageDigest {
+        let fingerprint: ImageFingerprint
+        let digest: String?
+    }
+    private var imageDigests: [URL: CachedImageDigest] = [:]
 
     var soundOn: Bool {
         get { !defaults.bool(forKey: "soundOff") }
@@ -71,10 +101,20 @@ final class Line: ObservableObject {
     init(defaults: UserDefaults = .standard, clipboardFolder: URL = ClipboardStore.defaultFolder) {
         self.defaults = defaults
         clipboardStore = ClipboardStore(folder: clipboardFolder)
+        originalClipboardFiles = Set((defaults.stringArray(forKey: "clipboardOriginalFiles") ?? [])
+            .map { URL(fileURLWithPath: $0).standardizedFileURL }
+            .filter { FileManager.default.fileExists(atPath: $0.path) })
         restore()
-        clipboardStore.removeUnreferenced(keeping: Set(items.map(\.url)))
+        for item in items where item.content.originalFileReference == true { protectOriginal(item.url) }
+        persistOriginalFiles()
+        restoreClipboardLease()
+        var keptFiles = Set(items.map(\.url)).union(originalClipboardFiles)
+        if let lease = clipboardFileLease { keptFiles.insert(lease.url) }
+        clipboardStore.removeUnreferenced(keeping: keptFiles)
         scheduleGust()
     }
+
+    deinit { clipboardLeaseTimer?.invalidate() }
 
     // MARK: Hanging and dropping
 
@@ -98,20 +138,21 @@ final class Line: ObservableObject {
         }
     }
 
-    private func isProtected(_ id: UUID) -> Bool {
-        id == draggingID || id == pressedID
+    private func isProtected(_ item: Pegged) -> Bool {
+        item.id == draggingID || item.id == pressedID || item.url.standardizedFileURL == editingURL?.standardizedFileURL
     }
 
     private func isProtectedURL(_ url: URL) -> Bool {
-        items.contains { isProtected($0.id) && $0.url.standardizedFileURL == url.standardizedFileURL }
+        items.contains { isProtected($0) && $0.url.standardizedFileURL == url.standardizedFileURL }
     }
 
     private func enforceCapacity() {
         // A card in use keeps its place and backing file. Preserve the newest
         // copy as well; the shelf can temporarily exceed capacity until release.
-        let newest = maxItems > 0 ? items.last(where: { !$0.falling })?.id : nil
-        while liveCount > maxItems,
-              let oldest = items.first(where: { !$0.falling && !isProtected($0.id) && $0.id != newest }) {
+        let capacity = max(0, maxItems)
+        let newest = capacity > 0 ? items.last(where: { !$0.falling })?.id : nil
+        while liveCount > capacity,
+              let oldest = items.first(where: { !$0.falling && !isProtected($0) && $0.id != newest }) {
             drop(oldest.id, quietly: true)
         }
     }
@@ -136,7 +177,12 @@ final class Line: ObservableObject {
                   !self.isProtectedURL(removed.url) else { return }
             self.dropCompletionTokens[id] = nil
             self.items.removeAll { $0.id == id }
+            if !self.items.contains(where: { $0.url.standardizedFileURL == removed.url.standardizedFileURL }) {
+                self.imageDigests[removed.url.standardizedFileURL] = nil
+            }
             if removed.content.originalFileReference != true,
+               !self.originalClipboardFiles.contains(removed.url.standardizedFileURL),
+               self.clipboardFileLease?.url != removed.url.standardizedFileURL,
                !self.items.contains(where: { $0.url.standardizedFileURL == removed.url.standardizedFileURL }) {
                 self.clipboardStore.remove(removed.url)
             }
@@ -182,11 +228,22 @@ final class Line: ObservableObject {
     /// Returns success for an existing card without revealing the shelf again.
     @discardableResult
     func ingestClipboard(_ payload: ClipboardPayload) -> Bool {
+        prune()
+        defer {
+            let retained = Set(items.map { $0.url.standardizedFileURL })
+            imageDigests = imageDigests.filter { retained.contains($0.key) }
+        }
         switch payload {
         case .files(let urls):
             var accepted = false
             for url in urls where url.isFileURL && FileManager.default.fileExists(atPath: url.path) {
-                if items.contains(where: { $0.url.standardizedFileURL == url.standardizedFileURL && !$0.falling }) {
+                protectOriginal(url)
+                let originalURL = url.resolvingSymlinksInPath().standardizedFileURL
+                if let index = items.firstIndex(where: { $0.url.resolvingSymlinksInPath().standardizedFileURL == originalURL && !$0.falling }) {
+                    if items[index].content.originalFileReference != true {
+                        items[index].content.originalFileReference = true
+                        save()
+                    }
                     accepted = true
                     continue
                 }
@@ -234,11 +291,17 @@ final class Line: ObservableObject {
                             content: (URL, String) -> ShelfContent) -> Bool {
         let digest = ClipboardStore.digest(data)
         if kind == .image, hasImage(with: digest) { return true }
-        if items.contains(where: { !$0.falling && $0.kind == kind && $0.content.digest == digest }) { return true }
+        if kind != .image, items.contains(where: {
+            !$0.falling && $0.kind == kind && $0.content.digest == digest
+                && (kind != .text || ClipboardStore.matches(data, at: $0.url))
+        }) { return true }
         do {
             let (url, digest) = try clipboardStore.write(data, kind: kind, extension: ext)
             let metadata = content(url, digest)
             guard let thumb = thumbnail(for: url, content: metadata) else { clipboardStore.remove(url); return false }
+            if kind == .image, let fingerprint = imageFingerprint(url) {
+                imageDigests[url.standardizedFileURL] = CachedImageDigest(fingerprint: fingerprint, digest: digest)
+            }
             append(Pegged(url: url, thumb: thumb, content: metadata))
             return true
         } catch {
@@ -246,19 +309,38 @@ final class Line: ObservableObject {
         }
     }
 
+    private func imageFingerprint(_ url: URL) -> ImageFingerprint? {
+        var info = stat()
+        let result = url.withUnsafeFileSystemRepresentation { path in
+            guard let path else { return Int32(-1) }
+            return fstatat(AT_FDCWD, path, &info, 0)
+        }
+        guard result == 0, info.st_size >= 0, info.st_size <= ClipboardStore.imageDataLimit else { return nil }
+        // ctime also catches in-place edits that preserve size and modification
+        // time. Device/inode catch replacements at the same path.
+        return ImageFingerprint(size: info.st_size,
+            modifiedSeconds: info.st_mtimespec.tv_sec, modifiedNanoseconds: info.st_mtimespec.tv_nsec,
+            changedSeconds: info.st_ctimespec.tv_sec, changedNanoseconds: info.st_ctimespec.tv_nsec,
+            device: info.st_dev, inode: info.st_ino)
+    }
+
     private func imageDigest(_ url: URL) -> String? {
-        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-              size <= ClipboardStore.imageDataLimit,
-              let data = try? Data(contentsOf: url, options: .mappedIfSafe),
-              let png = ClipboardStore.normalizedPNG(data) else { return nil }
-        return ClipboardStore.digest(png)
+        let key = url.standardizedFileURL
+        guard let fingerprint = imageFingerprint(key) else {
+            imageDigests[key] = nil
+            return nil
+        }
+        if let cached = imageDigests[key], cached.fingerprint == fingerprint { return cached.digest }
+        let digest = (try? Data(contentsOf: key, options: .mappedIfSafe))
+            .flatMap(ClipboardStore.normalizedPNG).map(ClipboardStore.digest)
+        imageDigests[key] = CachedImageDigest(fingerprint: fingerprint, digest: digest)
+        return digest
     }
 
     private func hasImage(with digest: String) -> Bool {
         items.contains { item in
             guard !item.falling, item.kind == .image else { return false }
-            let current = clipboardStore.owns(item.url) ? item.content.digest : imageDigest(item.url)
-            return current == digest
+            return imageDigest(item.url) == digest
         }
     }
 
@@ -278,7 +360,7 @@ final class Line: ObservableObject {
         let entry = NSPasteboardItem()
         switch item.kind {
         case .text:
-            guard let text = try? String(contentsOf: item.url, encoding: .utf8) else { return }
+            guard let text = ClipboardStore.text(at: item.url) else { return }
             entry.setString(text, forType: .string)
         case .link:
             guard let url = item.linkURL else { return }
@@ -292,7 +374,11 @@ final class Line: ObservableObject {
         }
         entry.setString("1", forType: ClipboardWatcher.ownCopyType)
         pasteboard.clearContents()
-        pasteboard.writeObjects([entry])
+        guard pasteboard.writeObjects([entry]) else { refreshClipboardLease(); return }
+        let leasedURL = item.kind == .image && item.content.originalFileReference != true
+            && !originalClipboardFiles.contains(item.url.standardizedFileURL)
+            && clipboardStore.owns(item.url) ? item.url.standardizedFileURL : nil
+        replaceClipboardLease(with: leasedURL, on: pasteboard)
 
         copiedID = id
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
@@ -375,6 +461,7 @@ final class Line: ObservableObject {
         guard let i = items.firstIndex(where: { $0.url == url && !$0.falling }),
               let thumb = makeThumbnail(url) else { return }
         items[i].thumb = thumb
+        imageDigests[url.standardizedFileURL] = nil
         if clipboardStore.owns(url) { items[i].content.digest = imageDigest(url); save() }
     }
 
@@ -395,7 +482,81 @@ final class Line: ObservableObject {
         }
     }
 
+    // MARK: Clipboard file lifetime
+
+    /// File consumers may use the copied file URL long after the card falls.
+    /// Poll only the pasteboard counter; private clipboard data is never read.
+    func refreshClipboardLease() {
+        guard let lease = clipboardFileLease else { return }
+        let board = NSPasteboard(name: .init(lease.pasteboardName))
+        guard board.changeCount != lease.changeCount || !clipboardStore.owns(lease.url) else { return }
+        replaceClipboardLease(with: nil, on: board)
+    }
+
+    private func replaceClipboardLease(with url: URL?, on pasteboard: NSPasteboard) {
+        let previous = clipboardFileLease?.url
+        clipboardLeaseTimer?.invalidate()
+        clipboardLeaseTimer = nil
+        clipboardFileLease = url.map {
+            ClipboardFileLease(url: $0, pasteboardName: pasteboard.name.rawValue, changeCount: pasteboard.changeCount)
+        }
+        if let lease = clipboardFileLease, let encoded = try? JSONEncoder().encode(lease) {
+            defaults.set(encoded, forKey: clipboardLeaseKey)
+            startClipboardLeaseTimer()
+        } else {
+            defaults.removeObject(forKey: clipboardLeaseKey)
+        }
+        if let previous, previous != url { scheduleReleasedClipboardCleanup(previous) }
+    }
+
+    private func restoreClipboardLease() {
+        guard let encoded = defaults.data(forKey: clipboardLeaseKey),
+              let lease = try? JSONDecoder().decode(ClipboardFileLease.self, from: encoded),
+              clipboardStore.owns(lease.url) else {
+            defaults.removeObject(forKey: clipboardLeaseKey)
+            return
+        }
+        let url = lease.url.standardizedFileURL
+        guard NSPasteboard(name: .init(lease.pasteboardName)).changeCount == lease.changeCount else {
+            defaults.removeObject(forKey: clipboardLeaseKey)
+            scheduleReleasedClipboardCleanup(url)
+            return
+        }
+        clipboardFileLease = ClipboardFileLease(url: url,
+            pasteboardName: lease.pasteboardName, changeCount: lease.changeCount)
+        startClipboardLeaseTimer()
+    }
+
+    private func startClipboardLeaseTimer() {
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshClipboardLease() }
+        }
+        clipboardLeaseTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+
+    private func scheduleReleasedClipboardCleanup(_ url: URL) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self, self.clipboardFileLease?.url != url,
+                  !self.originalClipboardFiles.contains(url),
+                  !self.items.contains(where: { $0.url.standardizedFileURL == url }) else { return }
+            self.clipboardStore.remove(url)
+        }
+    }
+
     // MARK: Persistence
+
+    /// A Finder reference never becomes disposable just because its card was
+    /// removed. Keep this exclusion across restarts without modifying the file.
+    private func protectOriginal(_ url: URL) {
+        let target = url.resolvingSymlinksInPath().standardizedFileURL
+        guard clipboardStore.owns(target), originalClipboardFiles.insert(target).inserted else { return }
+        persistOriginalFiles()
+    }
+
+    private func persistOriginalFiles() {
+        defaults.set(originalClipboardFiles.map(\.path).sorted(), forKey: "clipboardOriginalFiles")
+    }
 
     private func save() {
         let paths = items.filter { !$0.falling }.map(\.url.path)
@@ -408,13 +569,13 @@ final class Line: ObservableObject {
 
     private func restore() {
         let paths = defaults.stringArray(forKey: storeKey) ?? []
-        var restored = Set<String>()
+        var restored = Set<URL>()
         // Loading is not a new capture: do not enforce the default capacity
         // or overwrite the saved list while it is still being restored.
         let metadata = defaults.dictionary(forKey: "peggedContent") ?? [:]
         items = paths.compactMap { path in
-            guard restored.insert(path).inserted else { return nil }
-            let url = URL(fileURLWithPath: path)
+            let url = URL(fileURLWithPath: path).standardizedFileURL
+            guard restored.insert(url).inserted else { return nil }
             let content = (metadata[path] as? Data).flatMap { try? JSONDecoder().decode(ShelfContent.self, from: $0) }
                 ?? ShelfContent.image(url)
             guard FileManager.default.fileExists(atPath: path),
@@ -432,10 +593,10 @@ final class Line: ObservableObject {
     }
 
     private func pngData(_ url: URL) -> Data? {
-        if url.pathExtension.lowercased() == "png" { return try? Data(contentsOf: url) }
-        guard let tiff = NSImage(contentsOf: url)?.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff) else { return nil }
-        return rep.representation(using: .png, properties: [:])
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              size <= ClipboardStore.imageDataLimit,
+              let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
+        return ClipboardStore.normalizedPNG(data)
     }
 }
 

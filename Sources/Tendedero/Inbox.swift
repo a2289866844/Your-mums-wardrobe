@@ -12,12 +12,6 @@ import Foundation
 /// is watching.
 enum Inbox {
     private static let domain = "com.apple.screencapture" as CFString
-    /// macOS 26 and earlier read "location". macOS 27 reads
-    /// "location-screenshot" and ignores the old key, so both are written.
-    private static let locationKey = "location" as CFString
-    private static let screenshotLocationKey = "location-screenshot" as CFString
-    private static let thumbnailKey = "show-thumbnail" as CFString
-
     private static let enabledKey = "inboxEnabled"
     private static let offeredKey = "inboxOffered"
     private static let savedKey = "inboxSavedSettings"
@@ -39,43 +33,75 @@ enum Inbox {
         set { UserDefaults.standard.set(newValue, forKey: offeredKey) }
     }
 
-    /// Whether macOS is currently sending screenshots to our folder.
-    static var isApplied: Bool {
-        guard let current = CFPreferencesCopyAppValue(locationKey, domain) as? String else { return false }
-        return URL(fileURLWithPath: (current as NSString).expandingTildeInPath).standardizedFileURL
-            == folder.standardizedFileURL
-    }
-
-    static func apply() {
-        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        // Never save our own values as the "previous" ones, for example after
-        // a crash left them applied.
-        if !isApplied {
-            let saved: [String: Any] = [
-                "location": CFPreferencesCopyAppValue(locationKey, domain) as? String ?? NSNull(),
-                "locationScreenshot": CFPreferencesCopyAppValue(screenshotLocationKey, domain) as? String ?? NSNull(),
-                "thumbnail": CFPreferencesCopyAppValue(thumbnailKey, domain) as? Bool ?? NSNull(),
-            ]
-            UserDefaults.standard.set(saved.compactMapValues { $0 is NSNull ? nil : $0 }, forKey: savedKey)
+    static func apply() throws {
+        CFPreferencesAppSynchronize(domain)
+        try apply(defaults: .standard, folder: folder,
+                  read: { CFPreferencesCopyAppValue($0 as CFString, domain) },
+                  write: set)
+        guard CFPreferencesAppSynchronize(domain) else {
+            restore()
+            throw CocoaError(.fileWriteUnknown)
         }
-        set(locationKey, folder.path)
-        set(screenshotLocationKey, folder.path)
-        set(thumbnailKey, false)
     }
 
     static func restore() {
-        guard isApplied else { return }
-        let saved = UserDefaults.standard.dictionary(forKey: savedKey) ?? [:]
-        set(locationKey, saved["location"])
-        set(screenshotLocationKey, saved["locationScreenshot"])
-        set(thumbnailKey, saved["thumbnail"])
-        UserDefaults.standard.removeObject(forKey: savedKey)
+        CFPreferencesAppSynchronize(domain)
+        restore(defaults: .standard, folder: folder,
+                read: { CFPreferencesCopyAppValue($0 as CFString, domain) },
+                write: set, commit: { CFPreferencesAppSynchronize(domain) })
+    }
+
+    private static let settings = [("location", "location"),
+                                   ("location-screenshot", "locationScreenshot"),
+                                   ("show-thumbnail", "thumbnail")]
+
+    /// Injected preferences keep tests and fixture hosts away from system settings.
+    static func apply(defaults: UserDefaults, folder: URL,
+                      read: (String) -> Any?, write: (String, Any?) -> Void,
+                      createDirectory: (URL) throws -> Void = {
+                          try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true)
+                      }, persistBackup: (UserDefaults) -> Bool = { $0.synchronize() }) throws {
+        // A failed destination must not leave screenshots pointing at an unusable folder.
+        try createDirectory(folder)
+        let previous = defaults.dictionary(forKey: savedKey)
+        var saved = previous ?? [:]
+        for (key, backupKey) in settings {
+            let current = read(key)
+            // Preserve the original backup across a crash/relaunch. If a user
+            // changed a single setting, that new value becomes its next backup.
+            if previous == nil || !isManaged(current, key: key, folder: folder) {
+                saved[backupKey] = current
+            }
+        }
+        defaults.set(saved, forKey: savedKey)
+        guard persistBackup(defaults) else { throw CocoaError(.fileWriteUnknown) }
+        let path: String = folder.path
+        for (key, _) in settings { write(key, key == "show-thumbnail" ? false as Any : path as Any) }
+    }
+
+    static func restore(defaults: UserDefaults, folder: URL,
+                        read: (String) -> Any?, write: (String, Any?) -> Void,
+                        commit: () -> Bool = { true }) {
+        guard let saved = defaults.dictionary(forKey: savedKey) else { return }
+        for (key, backupKey) in settings where isManaged(read(key), key: key, folder: folder) {
+            write(key, saved[backupKey])
+        }
+        guard commit() else { return }
+        // Restore only values we still own; later user choices take precedence.
+        defaults.removeObject(forKey: savedKey)
+        defaults.synchronize()
+    }
+
+    private static func isManaged(_ value: Any?, key: String, folder: URL) -> Bool {
+        if key == "show-thumbnail" { return (value as? Bool) == false }
+        guard let path = value as? String else { return false }
+        return URL(fileURLWithPath: (path as NSString).expandingTildeInPath).standardizedFileURL.path
+            == folder.standardizedFileURL.path
     }
 
     /// Writes through cfprefsd, so the screenshot service sees it at once.
     /// A nil value removes the key and returns it to the macOS default.
-    private static func set(_ key: CFString, _ value: Any?) {
-        CFPreferencesSetAppValue(key, value as CFPropertyList?, domain)
-        CFPreferencesAppSynchronize(domain)
+    private static func set(_ key: String, _ value: Any?) {
+        CFPreferencesSetAppValue(key as CFString, value as CFPropertyList?, domain)
     }
 }

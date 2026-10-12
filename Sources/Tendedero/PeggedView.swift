@@ -9,6 +9,8 @@ struct PeggedView: View {
     @State private var swing: Double = 0
     @State private var arrived = false
     @State private var hovering = false
+    @State private var breezeTask: Task<Void, Never>?
+    @State private var nudgeTask: Task<Void, Never>?
 
     private var copied: Bool { line.copiedID == item.id }
     private var dragging: Bool { line.draggingID == item.id }
@@ -28,8 +30,14 @@ struct PeggedView: View {
         .transaction { t in if item.falling { t.animation = nil } }
         .animation(.easeOut(duration: 0.16), value: item.flying)
         .onAppear(perform: arrive)
+        .onDisappear {
+            breezeTask?.cancel()
+            nudgeTask?.cancel()
+        }
         .onChange(of: item.flying) { was, now in if was && !now { land() } }
-        .onChange(of: line.gust) { _, _ in breeze() }
+        .onChange(of: line.gust) { _, _ in
+            if line.revealed && !pressed && !dragging { breeze() }
+        }
         .onChange(of: copied) { _, isCopied in if isCopied { nudge(3) } }
     }
 
@@ -171,7 +179,7 @@ struct PeggedView: View {
         .onHover { hovering = $0 }
         .background(GeometryReader { g in
             Color.clear.preference(key: HitRectsKey.self,
-                                   value: item.falling ? [:] : [item.id: g.frame(in: .global)])
+                                   value: item.falling || item.flying ? [:] : [item.id: g.frame(in: .global)])
         })
     }
 
@@ -193,14 +201,20 @@ struct PeggedView: View {
 
     private func breeze() {
         let delay = Double.random(in: 0...0.35)
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+        breezeTask?.cancel()
+        breezeTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled, line.revealed, !pressed, !dragging else { return }
             nudge(Double.random(in: 1.6...3.4))
         }
     }
 
     private func nudge(_ degrees: Double) {
+        nudgeTask?.cancel()
         withAnimation(.easeOut(duration: 0.3)) { swing = degrees }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+        nudgeTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(0.3))
+            guard !Task.isCancelled else { return }
             withAnimation(.interpolatingSpring(stiffness: 38, damping: 2.4)) { swing = 0 }
         }
     }

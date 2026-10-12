@@ -19,7 +19,7 @@ Press **Control + Option + T** to show or hide the shelf. **Click a card to open
 
 **Hang copied items**, introduced in 1.1.0, is enabled by default. It adds newly copied images, text, HTTP(S) links, and files to the shelf. Turn it off in the menu bar to pause collection. Clipline skips content carrying protected clipboard markers, but cannot identify every password or confidential item; pause collection before copying sensitive content. Shelf contents are saved locally and restored after restarting. Clipboard-generated images, text, and links are stored in `~/Library/Application Support/Clipline/Clipboard`; external file cards retain references to their original files.
 
-The shelf has a limited capacity of **3–12 slots**, depending on screen width. When full, the oldest card drops off; this is a temporary shelf with limited capacity. Cards have a consistent height, and images fit fully inside them with their aspect ratio preserved and no cropping.
+The shelf has a limited capacity of **1–12 slots**, depending on screen width. When full, the oldest card drops off; this is a temporary shelf with limited capacity. Cards have a consistent height, and images fit fully inside them with their aspect ratio preserved and no cropping.
 
 On first launch, Clipline asks whether to manage your screenshot location. You can choose **Not now**.
 

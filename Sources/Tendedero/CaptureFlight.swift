@@ -16,11 +16,60 @@ func captureRect(of url: URL) -> CGRect? {
     }
     guard let data,
           let values = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [NSNumber],
-          values.count == 4, let main = NSScreen.screens.first else { return nil }
+          let main = NSScreen.screens.first else { return nil }
+    return captureRect(globalRect: values, mainDisplayTop: main.frame.maxY)
+}
+
+func captureRect(globalRect values: [NSNumber], mainDisplayTop: CGFloat) -> CGRect? {
+    guard values.count == 4 else { return nil }
     let x = CGFloat(truncating: values[0]), y = CGFloat(truncating: values[1])
     let w = CGFloat(truncating: values[2]), h = CGFloat(truncating: values[3])
-    guard w > 2, h > 2 else { return nil }
-    return CGRect(x: x, y: main.frame.maxY - y - h, width: w, height: h)
+    guard x.isFinite, y.isFinite, w.isFinite, h.isFinite, mainDisplayTop.isFinite,
+          w > 2, h > 2 else { return nil }
+    return CGRect(x: x, y: mainDisplayTop - y - h, width: w, height: h)
+}
+
+/// A moving landing target starts a new segment at the current position.
+/// Late shelf changes get a short settling interval instead of a final snap.
+struct CaptureFlightPath {
+    private var from: CGRect
+    private var to: CGRect
+    private var segmentStart: TimeInterval = 0
+    private var segmentDuration: TimeInterval
+    private var arc: CGFloat
+
+    var deadline: TimeInterval { segmentStart + segmentDuration }
+
+    init(from: CGRect, to: CGRect, duration: TimeInterval, arc: CGFloat = 30) {
+        self.from = from
+        self.to = to
+        segmentDuration = duration
+        self.arc = arc
+    }
+
+    mutating func retarget(to target: CGRect?, at elapsed: TimeInterval) {
+        guard let target, target != to,
+              target.origin.x.isFinite, target.origin.y.isFinite,
+              target.width.isFinite, target.height.isFinite,
+              target.width > 0, target.height > 0 else { return }
+        let current = frame(at: elapsed)
+        let remaining = deadline - elapsed
+        from = current
+        to = target
+        segmentStart = elapsed
+        segmentDuration = max(0.18, remaining)
+        // The current rectangle already includes the original arc's height.
+        arc = 0
+    }
+
+    func frame(at elapsed: TimeInterval) -> CGRect {
+        let raw = max(0, min(1, (elapsed - segmentStart) / segmentDuration))
+        let k = CGFloat(raw < 0.5 ? 4 * raw * raw * raw : 1 - pow(-2 * raw + 2, 3) / 2)
+        func lerp(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * k }
+        return CGRect(x: lerp(from.minX, to.minX),
+                      y: lerp(from.minY, to.minY) + sin(.pi * k) * arc,
+                      width: lerp(from.width, to.width), height: lerp(from.height, to.height))
+    }
 }
 
 /// The capture lifting off the screen and flying up to the line. It turns
@@ -43,6 +92,9 @@ final class CaptureFlight {
     private let from: CGRect
     private let to: CGRect
     private let tilt: CGFloat
+    private let frameInterval: TimeInterval
+    private var path: CaptureFlightPath
+    private var destinationProvider: (() -> CGRect?)?
     private var falling = false
     private var duration: CFTimeInterval = CaptureFlight.duration
     private var start: CFTimeInterval = 0
@@ -55,9 +107,12 @@ final class CaptureFlight {
     ///   - from: the captured area, in screen coordinates.
     ///   - to: the card's frame on the line, in screen coordinates, unrotated.
     ///   - tilt: the card's resting tilt in degrees, clockwise, as SwiftUI uses.
+    ///   - destination: the current card frame if the shelf changes during flight.
     static func fly(image: CGImage, from: CGRect, to: CGRect, tilt: CGFloat, on screen: NSScreen,
+                    destination: (() -> CGRect?)? = nil,
                     completion: @escaping () -> Void) {
         let flight = CaptureFlight(image: image, from: from, to: to, tilt: tilt, screen: screen)
+        flight.destinationProvider = destination
         current.append(flight)
         flight.completion = { [weak flight] in
             completion()
@@ -82,6 +137,9 @@ final class CaptureFlight {
         self.from = from
         self.to = to
         self.tilt = tilt
+        path = CaptureFlightPath(from: from, to: to, duration: Self.duration, arc: Self.arc)
+        let refreshRate = screen.maximumFramesPerSecond > 0 ? screen.maximumFramesPerSecond : 60
+        frameInterval = 1.0 / Double(min(120, refreshRate))
         window = NSPanel(contentRect: screen.frame, styleMask: [.borderless, .nonactivatingPanel],
                          backing: .buffered, defer: false)
         window.isOpaque = false
@@ -111,7 +169,7 @@ final class CaptureFlight {
         edge.mask = edgeMask
 
         photo.contents = image
-        photo.contentsGravity = .resizeAspectFill
+        photo.contentsGravity = .resizeAspect
         photo.masksToBounds = true
         photo.contentsScale = scale
 
@@ -135,7 +193,7 @@ final class CaptureFlight {
         if falling { update(1); updateFall(0) } else { update(0) }
         window.orderFrontRegardless()
         start = CACurrentMediaTime()
-        let timer = Timer(timeInterval: 1.0 / 120.0, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: frameInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
         RunLoop.main.add(timer, forMode: .common)
@@ -143,9 +201,15 @@ final class CaptureFlight {
     }
 
     private func tick() {
-        let k = min(1, (CACurrentMediaTime() - start) / duration)
-        if falling { updateFall(k) } else { update(k) }
-        guard k >= 1 else { return }
+        let elapsed = CACurrentMediaTime() - start
+        let k = min(1, elapsed / duration)
+        if falling {
+            updateFall(k)
+        } else {
+            path.retarget(to: destinationProvider?(), at: elapsed)
+            update(k, frame: path.frame(at: elapsed))
+        }
+        guard k >= 1, falling || elapsed >= path.deadline else { return }
         timer?.invalidate()
         timer = nil
         completion()
@@ -183,15 +247,16 @@ final class CaptureFlight {
         return t * t * (3 - 2 * t)
     }
 
-    private func update(_ raw: Double) {
+    private func update(_ raw: Double, frame: CGRect? = nil) {
         let k = CGFloat(Self.easeInOutCubic(raw))
         let chrome = Float(Self.smooth(Double(k), 0.35, 1))
         let origin = window.frame.origin
         func lerp(_ a: CGFloat, _ b: CGFloat) -> CGFloat { a + (b - a) * k }
 
-        let w = lerp(from.width, to.width), h = lerp(from.height, to.height)
-        let topX = lerp(from.midX, to.midX) - origin.x
-        let topY = lerp(from.maxY, to.maxY) - origin.y + sin(.pi * k) * Self.arc
+        let w = frame?.width ?? lerp(from.width, to.width)
+        let h = frame?.height ?? lerp(from.height, to.height)
+        let topX = (frame?.midX ?? lerp(from.midX, to.midX)) - origin.x
+        let topY = (frame?.maxY ?? (lerp(from.maxY, to.maxY) + sin(.pi * k) * Self.arc)) - origin.y
         let inset = 4 * k
         let radius = lerp(0, 16)
 

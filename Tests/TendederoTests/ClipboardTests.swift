@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import XCTest
 @testable import Tendedero
 
@@ -36,10 +37,11 @@ final class ClipboardTests: XCTestCase {
         return pb
     }
 
-    private func png() throws -> Data {
+    private func png(red: CGFloat = 0) throws -> Data {
         let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 2, pixelsHigh: 2,
                                   bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
                                   isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        rep.setColor(NSColor(calibratedRed: red, green: 0, blue: 0, alpha: 1), atX: 0, y: 0)
         return try XCTUnwrap(rep.representation(using: .png, properties: [:]))
     }
 
@@ -356,6 +358,353 @@ final class ClipboardTests: XCTestCase {
         store.removeUnreferenced(keeping: [])
         XCTAssertTrue(FileManager.default.fileExists(atPath: fresh.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: old.path))
+    }
+
+
+    @MainActor
+    func testReducingCapacityImmediatelyEvictsOldestUnprotectedCards() throws {
+        let line = Line(defaults: defaults(), clipboardFolder: try folder())
+        for index in 0..<3 { XCTAssertTrue(line.ingestClipboard(.text("card \(index)"))) }
+        let protected = try XCTUnwrap(line.items.first)
+        line.draggingID = protected.id
+        line.maxItems = 1
+        XCTAssertEqual(line.liveCount, 2, "Only the dragged card and newest copy may exceed capacity")
+        line.draggingID = nil
+        XCTAssertEqual(line.liveCount, 1)
+        XCTAssertEqual(line.items.last?.previewText, "card 2")
+    }
+
+    @MainActor
+    func testFinderCopyUpgradesExistingScreenshotToOriginalReference() throws {
+        let root = try folder()
+        let image = root.appendingPathComponent("screenshot.png")
+        try png().write(to: image)
+        let preferences = defaults()
+        let line = Line(defaults: preferences, clipboardFolder: root.appendingPathComponent("Clipboard"))
+        XCTAssertNotNil(line.hang(image, quietly: true))
+        XCTAssertTrue(line.ingestClipboard(.files([image])))
+        XCTAssertEqual(line.liveCount, 1)
+        XCTAssertEqual(line.items.first?.content.originalFileReference, true)
+        let restored = Line(defaults: preferences, clipboardFolder: root.appendingPathComponent("Clipboard"))
+        XCTAssertEqual(restored.items.first?.content.originalFileReference, true)
+    }
+
+    @MainActor
+    func testMissingManagedFileDoesNotSuppressNewCopy() throws {
+        let line = Line(defaults: defaults(), clipboardFolder: try folder())
+        XCTAssertTrue(line.ingestClipboard(.text("recover this copy")))
+        let original = try XCTUnwrap(line.items.first)
+        try FileManager.default.removeItem(at: original.url)
+        XCTAssertTrue(line.ingestClipboard(.text("recover this copy")))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.url.path))
+        XCTAssertEqual(line.liveCount, 1)
+        XCTAssertNotEqual(line.items.last?.id, original.id)
+    }
+
+    @MainActor
+    func testEditedManagedImageDoesNotSuppressOriginalAfterRestore() throws {
+        let root = try folder()
+        let preferences = defaults()
+        let original = try png()
+        let edited = try png(red: 1)
+        let line = Line(defaults: preferences, clipboardFolder: root)
+        XCTAssertTrue(line.ingestClipboard(.image(original)))
+        let editedURL = try XCTUnwrap(line.items.first?.url)
+        try edited.write(to: editedURL)
+        let restored = Line(defaults: preferences, clipboardFolder: root)
+        XCTAssertTrue(restored.ingestClipboard(.image(original)))
+        XCTAssertEqual(restored.liveCount, 2)
+        XCTAssertEqual(try Data(contentsOf: editedURL), edited)
+        XCTAssertNotEqual(restored.items.last?.url, editedURL)
+    }
+
+
+    @MainActor
+    func testSourceMetadataRaceDoesNotReadReplacementPrivatePayload() {
+        let pb = pasteboard()
+        var reads = 0
+        let watcher = ClipboardWatcher(pasteboard: pb) { _ in XCTFail("Private copy delivered"); return true }
+        let privateProvider = ClipboardTestProvider { _, item, type in
+            reads += 1
+            item.setString("secret", forType: type)
+        }
+        let sourceProvider = ClipboardTestProvider { pasteboard, item, type in
+            item.setString("ordinary.app", forType: type)
+            let replacement = NSPasteboardItem()
+            replacement.setString("1", forType: .init("org.nspasteboard.ConcealedType"))
+            replacement.setDataProvider(privateProvider, forTypes: [.string])
+            pasteboard.clearContents()
+            pasteboard.writeObjects([replacement])
+        }
+        let item = NSPasteboardItem()
+        item.setString("ordinary content", forType: .string)
+        item.setDataProvider(sourceProvider, forTypes: [.init("org.nspasteboard.source")])
+        pb.clearContents()
+        pb.writeObjects([item])
+        watcher.poll()
+        watcher.poll()
+        XCTAssertEqual(reads, 0)
+    }
+
+    @MainActor
+    func testFinderReferenceInManagedFolderSurvivesDropAndStartupCleanup() async throws {
+        let root = try folder()
+        let preferences = defaults()
+        let store = ClipboardStore(folder: root)
+        let (original, _) = try store.write(Data("original".utf8), kind: .text, extension: "txt")
+        let line = Line(defaults: preferences, clipboardFolder: root)
+        XCTAssertTrue(line.ingestClipboard(.files([original])))
+        line.drop(try XCTUnwrap(line.items.first?.id), quietly: true)
+        try await Task.sleep(nanoseconds: 750_000_000)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * 24 * 60 * 60)],
+                                              ofItemAtPath: original.path)
+        let restored = Line(defaults: preferences, clipboardFolder: root)
+        XCTAssertTrue(restored.items.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: original), Data("original".utf8))
+    }
+
+    @MainActor
+    func testEditedManagedImageInvalidatesLiveDedupCache() throws {
+        let line = Line(defaults: defaults(), clipboardFolder: try folder())
+        let original = try png()
+        XCTAssertTrue(line.ingestClipboard(.image(original)))
+        let editedURL = try XCTUnwrap(line.items.first?.url)
+        try png(red: 1).write(to: editedURL, options: .atomic)
+        XCTAssertTrue(line.ingestClipboard(.image(original)))
+        XCTAssertEqual(line.liveCount, 2)
+        XCTAssertNotEqual(line.items.last?.url, editedURL)
+    }
+
+    @MainActor
+    func testMarkupFileSurvivesEvictionAndDeferredRemovalUntilEditorCloses() async throws {
+        let line = Line(defaults: defaults(), clipboardFolder: try folder())
+        line.maxItems = 1
+        XCTAssertTrue(line.ingestClipboard(.image(try png())))
+        let original = try XCTUnwrap(line.items.first)
+        line.editingURL = original.url
+        XCTAssertTrue(line.ingestClipboard(.text("newest")))
+        XCTAssertEqual(line.liveCount, 2)
+        line.drop(original.id, quietly: true)
+        try await Task.sleep(nanoseconds: 750_000_000)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: original.url.path))
+        line.editingURL = nil
+        try await Task.sleep(nanoseconds: 750_000_000)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: original.url.path))
+    }
+
+
+    @MainActor
+    func testOversizedEditedTextDoesNotReplaceClipboard() throws {
+        let line = Line(defaults: defaults(), clipboardFolder: try folder())
+        XCTAssertTrue(line.ingestClipboard(.text("small copy")))
+        let item = try XCTUnwrap(line.items.first)
+        try Data(repeating: 65, count: ClipboardStore.textLimit + 1).write(to: item.url)
+        let pb = pasteboard()
+        setText("keep existing copy", on: pb)
+        line.copy(item.id, to: pb)
+        XCTAssertEqual(pb.string(forType: .string), "keep existing copy")
+        XCTAssertNil(line.copiedID)
+    }
+
+
+    @MainActor
+    func testImageDedupCacheDetectsInPlaceEditWithPreservedModificationDate() throws {
+        let line = Line(defaults: defaults(), clipboardFolder: try folder())
+        let original = try png()
+        XCTAssertTrue(line.ingestClipboard(.image(original)))
+        let url = try XCTUnwrap(line.items.first?.url)
+        let modified = try XCTUnwrap(url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)
+        let changed = try png(red: 1)
+        let handle = try FileHandle(forWritingTo: url)
+        try handle.write(contentsOf: changed)
+        try handle.truncate(atOffset: UInt64(changed.count))
+        try handle.close()
+        try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+        XCTAssertTrue(line.ingestClipboard(.image(original)))
+        XCTAssertEqual(line.liveCount, 2)
+    }
+
+
+
+    @MainActor
+    func testEditedManagedTextDoesNotSuppressOriginalCopy() throws {
+        let line = Line(defaults: defaults(), clipboardFolder: try folder())
+        XCTAssertTrue(line.ingestClipboard(.text("original text")))
+        let originalURL = try XCTUnwrap(line.items.first?.url)
+        try Data("modified text".utf8).write(to: originalURL)
+        XCTAssertTrue(line.ingestClipboard(.text("original text")))
+        XCTAssertEqual(line.liveCount, 2)
+        XCTAssertEqual(try String(contentsOf: originalURL, encoding: .utf8), "modified text")
+        XCTAssertEqual(try String(contentsOf: XCTUnwrap(line.items.last?.url), encoding: .utf8), "original text")
+    }
+
+
+    @MainActor
+    func testFinderSymlinkReferenceProtectsExistingManagedTarget() throws {
+        let root = try folder()
+        let preferences = defaults()
+        let line = Line(defaults: preferences, clipboardFolder: root.appendingPathComponent("Clipboard"))
+        XCTAssertTrue(line.ingestClipboard(.image(try png())))
+        let target = try XCTUnwrap(line.items.first?.url)
+        let alias = root.appendingPathComponent("original-alias.png")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: target)
+        XCTAssertTrue(line.ingestClipboard(.files([alias])))
+        XCTAssertEqual(line.liveCount, 1)
+        XCTAssertEqual(line.items.first?.content.originalFileReference, true)
+        XCTAssertEqual(preferences.stringArray(forKey: "clipboardOriginalFiles"), [target.path])
+    }
+
+
+    @MainActor
+    func testImageProviderRaceDoesNotReadReplacementPrivateRepresentation() {
+        let pb = pasteboard()
+        var privateReads = 0
+        let watcher = ClipboardWatcher(pasteboard: pb) { _ in XCTFail("Private image delivered"); return true }
+        let privateProvider = ClipboardTestProvider { _, item, type in
+            privateReads += 1
+            item.setData(Data("secret image".utf8), forType: type)
+        }
+        let provider = ClipboardTestProvider { pasteboard, item, type in
+            item.setData(Data("unfinished image".utf8), forType: type)
+            let replacement = NSPasteboardItem()
+            replacement.setString("1", forType: .init("org.nspasteboard.ConcealedType"))
+            replacement.setDataProvider(privateProvider, forTypes: [.tiff])
+            pasteboard.clearContents()
+            pasteboard.writeObjects([replacement])
+        }
+        let item = NSPasteboardItem()
+        item.setDataProvider(provider, forTypes: [.png])
+        pb.clearContents()
+        pb.writeObjects([item])
+        watcher.poll()
+        watcher.poll()
+        XCTAssertEqual(privateReads, 0)
+    }
+
+
+    @MainActor
+    func testCopyingOrientedTIFFPreservesRenderedDimensions() throws {
+        let root = try folder()
+        let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4, pixelsHigh: 2,
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+        let tiff = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(tiff, "public.tiff" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, try XCTUnwrap(bitmap.cgImage),
+                                  [kCGImagePropertyOrientation: 6] as CFDictionary)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let file = root.appendingPathComponent("rotated.tiff")
+        try (tiff as Data).write(to: file)
+        let line = Line(defaults: defaults(), clipboardFolder: root.appendingPathComponent("Clipboard"))
+        XCTAssertTrue(line.ingestClipboard(.files([file])))
+        let pb = pasteboard()
+        line.copy(try XCTUnwrap(line.items.first?.id), to: pb)
+        let copied = try XCTUnwrap(pb.data(forType: .png))
+        let source = try XCTUnwrap(CGImageSourceCreateWithData(copied as CFData, nil))
+        let properties = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
+        XCTAssertEqual(properties[kCGImagePropertyPixelWidth] as? Int, 2)
+        XCTAssertEqual(properties[kCGImagePropertyPixelHeight] as? Int, 4)
+    }
+
+
+    @MainActor
+    func testCopiedManagedImageFileSurvivesEvictionUntilClipboardChanges() async throws {
+        let line = Line(defaults: defaults(), clipboardFolder: try folder())
+        line.maxItems = 1
+        XCTAssertTrue(line.ingestClipboard(.image(try png())))
+        let copied = try XCTUnwrap(line.items.first)
+        let pb = pasteboard()
+        line.copy(copied.id, to: pb)
+        XCTAssertEqual(pb.string(forType: .fileURL), copied.url.absoluteString)
+        XCTAssertTrue(line.ingestClipboard(.text("evict copied image")))
+        try await Task.sleep(nanoseconds: 750_000_000)
+        XCTAssertFalse(line.items.contains { $0.id == copied.id })
+        XCTAssertTrue(FileManager.default.fileExists(atPath: copied.url.path))
+        setText("replacement copy", on: pb)
+        line.refreshClipboardLease()
+        try await Task.sleep(nanoseconds: 250_000_000)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: copied.url.path))
+        try await Task.sleep(nanoseconds: 500_000_000)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copied.url.path))
+    }
+
+    @MainActor
+    func testRestartPreservesValidCopiedImageLeaseDuringOldOrphanCleanup() async throws {
+        let root = try folder()
+        let preferences = defaults()
+        let pb = pasteboard()
+        var line: Line? = Line(defaults: preferences, clipboardFolder: root)
+        XCTAssertTrue(try XCTUnwrap(line).ingestClipboard(.image(try png())))
+        let copied = try XCTUnwrap(line?.items.first)
+        line?.copy(copied.id, to: pb)
+        line?.drop(copied.id, quietly: true)
+        try await Task.sleep(nanoseconds: 750_000_000)
+        XCTAssertTrue(try XCTUnwrap(line).items.isEmpty)
+        line = nil
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * 24 * 60 * 60)],
+                                              ofItemAtPath: copied.url.path)
+        let restored = Line(defaults: preferences, clipboardFolder: root)
+        XCTAssertTrue(restored.items.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: copied.url.path))
+        XCTAssertNotNil(preferences.data(forKey: "clipboardFileLease"))
+        setText("replacement copy", on: pb)
+        restored.refreshClipboardLease()
+        try await Task.sleep(nanoseconds: 750_000_000)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copied.url.path))
+        XCTAssertNil(preferences.data(forKey: "clipboardFileLease"))
+    }
+
+    @MainActor
+    func testClipboardLeaseReleasePreservesFinderOriginalReference() async throws {
+        let root = try folder()
+        let line = Line(defaults: defaults(), clipboardFolder: root)
+        XCTAssertTrue(line.ingestClipboard(.image(try png())))
+        let copied = try XCTUnwrap(line.items.first)
+        let pb = pasteboard()
+        line.copy(copied.id, to: pb)
+        XCTAssertTrue(line.ingestClipboard(.files([copied.url])))
+        line.drop(copied.id, quietly: true)
+        setText("replacement copy", on: pb)
+        line.refreshClipboardLease()
+        try await Task.sleep(nanoseconds: 750_000_000)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: copied.url.path))
+    }
+
+
+    @MainActor
+    func testClipboardLeaseTimerReleasesReplacedCopyWithoutManualRefresh() async throws {
+        let line = Line(defaults: defaults(), clipboardFolder: try folder())
+        XCTAssertTrue(line.ingestClipboard(.image(try png())))
+        let copied = try XCTUnwrap(line.items.first)
+        let pb = pasteboard()
+        line.copy(copied.id, to: pb)
+        line.drop(copied.id, quietly: true)
+        try await Task.sleep(nanoseconds: 750_000_000)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: copied.url.path))
+        setText("replacement copy", on: pb)
+        try await Task.sleep(nanoseconds: 3_100_000_000)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copied.url.path))
+    }
+
+    @MainActor
+    func testRestartRejectsExpiredLeaseAndReclaimsOldGeneratedOrphan() async throws {
+        let root = try folder()
+        let preferences = defaults()
+        let pb = pasteboard()
+        var line: Line? = Line(defaults: preferences, clipboardFolder: root)
+        XCTAssertTrue(try XCTUnwrap(line).ingestClipboard(.image(try png())))
+        let copied = try XCTUnwrap(line?.items.first)
+        line?.copy(copied.id, to: pb)
+        line?.drop(copied.id, quietly: true)
+        try await Task.sleep(nanoseconds: 750_000_000)
+        line = nil
+        setText("replacement copy", on: pb)
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-2 * 24 * 60 * 60)],
+                                              ofItemAtPath: copied.url.path)
+        let restored = Line(defaults: preferences, clipboardFolder: root)
+        XCTAssertTrue(restored.items.isEmpty)
+        XCTAssertNil(preferences.data(forKey: "clipboardFileLease"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: copied.url.path))
     }
 
     @MainActor

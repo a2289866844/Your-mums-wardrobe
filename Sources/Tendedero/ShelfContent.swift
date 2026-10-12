@@ -52,9 +52,7 @@ struct ClipboardStore {
             guard owns(url) else { throw CocoaError(.fileWriteNoPermission) }
             // Markup can modify a generated image in place. Keep that edited
             // card intact if the original bitmap is copied again later.
-            if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
-               size <= Self.imageDataLimit,
-               let existing = try? Data(contentsOf: url), existing == data { return (url, digest) }
+            if Self.matches(data, at: url) { return (url, digest) }
             url = folder.appendingPathComponent("\(kind.rawValue)-\(digest)-\(UUID().uuidString.lowercased()).\(ext)")
         }
         try data.write(to: url, options: .atomic)
@@ -98,6 +96,23 @@ struct ClipboardStore {
         }
     }
 
+    /// Comparing size first keeps edited collisions from causing an oversized
+    /// read. This also checks text cards whose saved digest can become stale.
+    static func matches(_ data: Data, at url: URL) -> Bool {
+        guard let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+              size == data.count,
+              let existing = try? Data(contentsOf: url, options: .mappedIfSafe) else { return false }
+        return existing == data
+    }
+
+    /// Bound the actual read as well as metadata: an editor can grow a backing file.
+    static func text(at url: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+        guard let data = try? handle.read(upToCount: textLimit + 1), data.count <= textLimit else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
     static func digest(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
@@ -112,7 +127,12 @@ struct ClipboardStore {
               let height = properties[kCGImagePropertyPixelHeight] as? Int,
               width > 0, height > 0, width <= 8192, height <= 8192,
               width * height <= 32_000_000,
-              let image = CGImageSourceCreateImageAtIndex(source, 0, [kCGImageSourceShouldCache: false] as CFDictionary)
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                kCGImageSourceShouldCache: false,
+                kCGImageSourceCreateThumbnailFromImageAlways: true,
+                kCGImageSourceCreateThumbnailWithTransform: true,
+                kCGImageSourceThumbnailMaxPixelSize: max(width, height),
+              ] as CFDictionary)
         else { return nil }
         let output = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(output, "public.png" as CFString, 1, nil) else { return nil }
