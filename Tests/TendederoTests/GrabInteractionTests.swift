@@ -4,6 +4,43 @@ import XCTest
 
 @MainActor
 final class GrabInteractionTests: XCTestCase {
+    func testCopyButtonOwnsItsHitRegionAndDoesNotOpenOrMarkup() {
+        _ = NSApplication.shared
+        let view = GrabView(frame: NSRect(x: 0, y: 0, width: 220, height: 182))
+        view.layout()
+        var copied = 0
+        var opened = 0
+        var markedUp = 0
+        view.onCopy = { copied += 1 }
+        view.onClick = { opened += 1 }
+        view.onLongPress = { markedUp += 1 }
+        XCTAssertTrue(view.hitTest(NSPoint(x: view.copyButton.frame.midX, y: view.copyButton.frame.midY)) === view.copyButton)
+        XCTAssertTrue(view.hitTest(NSPoint(x: 100, y: 100)) === view)
+        view.copyButton.performClick(nil)
+        XCTAssertEqual(copied, 1)
+        XCTAssertEqual(opened, 0)
+        XCTAssertEqual(markedUp, 0)
+        XCTAssertTrue(view.copyButton.acceptsFirstMouse(for: nil))
+    }
+
+    func testAccessibilityExposesSeparateCopyAndOpenActions() {
+        _ = NSApplication.shared
+        let view = view(.text)
+        var copied = 0
+        var opened = 0
+        view.onCopy = { copied += 1 }
+        view.onClick = { opened += 1 }
+        let children = view.accessibilityChildren()!
+        XCTAssertEqual(children.count, 2)
+        XCTAssertTrue(children[0] as? CardOpenElement === view.openElement)
+        XCTAssertTrue(children[1] as? CardCopyButton === view.copyButton)
+        XCTAssertTrue(view.openElement.isAccessibilityEnabled())
+        XCTAssertTrue(view.copyButton.accessibilityPerformPress())
+        XCTAssertTrue(view.openElement.accessibilityPerformPress())
+        XCTAssertEqual(copied, 1)
+        XCTAssertEqual(opened, 1)
+    }
+
     func testOversizedBackingTextIsRejectedBeforeStartingDrag() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("clipline-drag-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

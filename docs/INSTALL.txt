@@ -1,4 +1,4 @@
-Clipline 1.1.5 — macOS 14+ / Apple Silicon and Intel
+Clipline 1.1.6 — macOS 14+ / Apple Silicon and Intel
 
 Install: drag Clipline.app to Applications, then launch it.
 If macOS blocks the first launch: System Settings → Privacy & Security → Clipline → Open Anyway.
@@ -12,7 +12,9 @@ Old screenshots are not moved. This folder setting remains after quitting Clipli
 Screenshot monitoring retries if folder access is temporarily unavailable and
 reconnects when the watched folder is replaced. Allow screenshot-folder access
 when macOS asks; an app update may prompt again.
-Click a card to open it. Right-click → Copy to copy it.
+Click the Copy button on any card to copy it. A checkmark and Copied confirm
+success; Retry indicates a failed copy and lets you try again. Click the card's
+main area to open it. Right-click → Copy remains available.
 Images open in macOS Preview. Enable Clipline in System Settings → Privacy &
 Security → Accessibility to center the matching image window on the display
 where you clicked, keeping its current size. After granting access, click the

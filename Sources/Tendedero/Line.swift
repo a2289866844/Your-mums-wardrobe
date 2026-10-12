@@ -40,6 +40,7 @@ final class Line: ObservableObject {
     @Published private(set) var items: [Pegged] = []
     @Published private(set) var gust = 0
     @Published var copiedID: UUID?
+    @Published private(set) var copyFailedID: UUID?
     @Published var draggingID: UUID? {
         didSet { if oldValue != draggingID { interactionChanged() } }
     }
@@ -62,7 +63,10 @@ final class Line: ObservableObject {
     }
     /// Called for each new capture, even when the line is already at capacity.
     var onCapture: (() -> Void)?
+    var onCopyFeedback: (() -> Void)?
     private let defaults: UserDefaults
+    private let copyPasteboard: NSPasteboard
+    private var copyFeedbackToken = UUID()
     private let clipboardStore: ClipboardStore
     private var dropCompletionTokens: [UUID: UUID] = [:]
     private var originalClipboardFiles: Set<URL> = []
@@ -98,8 +102,10 @@ final class Line: ObservableObject {
 
     private let storeKey = "pegged"
 
-    init(defaults: UserDefaults = .standard, clipboardFolder: URL = ClipboardStore.defaultFolder) {
+    init(defaults: UserDefaults = .standard, clipboardFolder: URL = ClipboardStore.defaultFolder,
+         copyPasteboard: NSPasteboard = .general) {
         self.defaults = defaults
+        self.copyPasteboard = copyPasteboard
         clipboardStore = ClipboardStore(folder: clipboardFolder)
         originalClipboardFiles = Set((defaults.stringArray(forKey: "clipboardOriginalFiles") ?? [])
             .map { URL(fileURLWithPath: $0).standardizedFileURL }
@@ -355,34 +361,51 @@ final class Line: ObservableObject {
 
     // MARK: Actions on one photo
 
-    func copy(_ id: UUID, to pasteboard: NSPasteboard = .general) {
+    func copy(_ id: UUID, to pasteboard: NSPasteboard? = nil) {
         guard let item = items.first(where: { $0.id == id }) else { return }
+        let pasteboard = pasteboard ?? copyPasteboard
         let entry = NSPasteboardItem()
         switch item.kind {
         case .text:
-            guard let text = ClipboardStore.text(at: item.url) else { return }
+            guard let text = ClipboardStore.text(at: item.url) else { copyFeedback(id, success: false); return }
             entry.setString(text, forType: .string)
         case .link:
-            guard let url = item.linkURL else { return }
+            guard let url = item.linkURL else { copyFeedback(id, success: false); return }
             entry.setString(url.absoluteString, forType: .URL)
             entry.setString(url.absoluteString, forType: .string)
         case .image:
+            guard FileManager.default.fileExists(atPath: item.url.path) else { copyFeedback(id, success: false); return }
             if let png = pngData(item.url) { entry.setData(png, forType: .png) }
             entry.setString(item.url.absoluteString, forType: .fileURL)
         case .file:
+            guard FileManager.default.fileExists(atPath: item.url.path) else { copyFeedback(id, success: false); return }
             entry.setString(item.url.absoluteString, forType: .fileURL)
         }
         entry.setString("1", forType: ClipboardWatcher.ownCopyType)
         pasteboard.clearContents()
-        guard pasteboard.writeObjects([entry]) else { refreshClipboardLease(); return }
+        guard pasteboard.writeObjects([entry]) else {
+            refreshClipboardLease()
+            copyFeedback(id, success: false)
+            return
+        }
         let leasedURL = item.kind == .image && item.content.originalFileReference != true
             && !originalClipboardFiles.contains(item.url.standardizedFileURL)
             && clipboardStore.owns(item.url) ? item.url.standardizedFileURL : nil
         replaceClipboardLease(with: leasedURL, on: pasteboard)
 
-        copiedID = id
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            if self?.copiedID == id { self?.copiedID = nil }
+        copyFeedback(id, success: true)
+    }
+
+    private func copyFeedback(_ id: UUID, success: Bool) {
+        let token = UUID()
+        copyFeedbackToken = token
+        copiedID = success ? id : nil
+        copyFailedID = success ? nil : id
+        onCopyFeedback?()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+            guard let self, self.copyFeedbackToken == token else { return }
+            self.copiedID = nil
+            self.copyFailedID = nil
         }
     }
 

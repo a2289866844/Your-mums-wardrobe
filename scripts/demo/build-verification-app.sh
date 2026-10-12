@@ -17,6 +17,12 @@ mkdir -p "$RUNTIME/Screenshots" "$RUNTIME/Clipboard"
 cat > "$WORK/main.swift" <<'SWIFT'
 import AppKit
 
+@MainActor
+final class CopyDemoAction: NSObject {
+    var run: () -> Void = {}
+    @objc func showCards() { run() }
+}
+
 MainActor.assumeIsolated {
     let app = NSApplication.shared
     let resource = Bundle.main.url(forResource: "Runtime", withExtension: "plist")!
@@ -30,11 +36,56 @@ MainActor.assumeIsolated {
     defaults.set(true, forKey: "soundOff")
     defaults.set(true, forKey: "welcomed")
     defaults.set(false, forKey: "clipboardEnabled")
-    let line = Line(defaults: defaults, clipboardFolder: runtime.appendingPathComponent("Clipboard", isDirectory: true))
+    let copyDemo = configuration["copyDemo"] as? Bool ?? false
+    let copyBoard = copyDemo ? NSPasteboard(name: .init(suite + ".copy-demo")) : .general
+    let line = Line(defaults: defaults, clipboardFolder: runtime.appendingPathComponent("Clipboard", isDirectory: true), copyPasteboard: copyBoard)
     let delegate = AppDelegate(line: line, screenshotFolder: runtime.appendingPathComponent("Screenshots", isDirectory: true), defaults: defaults)
     app.delegate = delegate
     app.setActivationPolicy(.accessory)
-    withExtendedLifetime(delegate) { app.run() }
+    let demoAction = CopyDemoAction()
+    var demoWindow: NSWindow?
+    if copyDemo {
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 260, height: 100),
+                              styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        window.title = "Copy verification"
+        window.isReleasedWhenClosed = false
+        let show = NSButton(title: "Show cards", target: demoAction, action: #selector(CopyDemoAction.showCards))
+        show.frame = NSRect(x: 60, y: 32, width: 140, height: 32)
+        show.bezelStyle = .rounded
+        window.contentView?.addSubview(show)
+        demoAction.run = {
+            if line.revealed { delegate.perform(NSSelectorFromString("toggle")) }
+            delegate.perform(NSSelectorFromString("toggle"))
+            window.orderOut(nil)
+        }
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        demoWindow = window
+        app.setActivationPolicy(.regular)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            let showFeedback = line.onCopyFeedback
+            line.onCopyFeedback = {
+                showFeedback?()
+                var result: [String: Any] = ["copied": line.copiedID != nil, "failed": line.copyFailedID != nil,
+                                           "hasPNG": copyBoard.data(forType: .png) != nil]
+                for type in [NSPasteboard.PasteboardType.string, .URL, .fileURL] {
+                    if let value = copyBoard.string(forType: type) { result[type.rawValue] = value }
+                }
+                if let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) {
+                    try? data.write(to: runtime.appendingPathComponent("copy-result.json"), options: .atomic)
+                }
+            }
+            let fullText = "Copy in one click\n" + String(repeating: "The full text is copied, including content beyond this preview.\n", count: 20)
+            _ = line.ingestClipboard(.text(fullText))
+            _ = line.ingestClipboard(.link(URL(string: "https://example.com/copy-demo")!))
+            let file = runtime.appendingPathComponent("Example.txt")
+            try? Data("A synthetic file for Copy verification.\n".utf8).write(to: file)
+            _ = line.ingestClipboard(.files([file]))
+            if let icon = Bundle.main.url(forResource: "Clipline", withExtension: "png"),
+               let data = try? Data(contentsOf: icon) { _ = line.ingestClipboard(.image(data)) }
+        }
+    }
+    withExtendedLifetime((delegate, demoWindow, demoAction)) { app.run() }
 }
 SWIFT
 SOURCES=()
@@ -54,17 +105,17 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>io.github.a2289866844.clipline.verification</string>
 <key>CFBundleName</key><string>Clipline Verification</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>1.1.5</string>
+<key>CFBundleShortVersionString</key><string>1.1.6</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>
 PLIST
-python3 - "$APP/Contents/Resources/Runtime.plist" "$RUNTIME" "$SUITE" <<'PY'
+python3 - "$APP/Contents/Resources/Runtime.plist" "$RUNTIME" "$SUITE" "${CLIPLINE_COPY_DEMO:-0}" <<'PY'
 import plistlib, sys
 with open(sys.argv[1], 'wb') as file:
-    plistlib.dump({'folder': sys.argv[2], 'suite': sys.argv[3]}, file)
+    plistlib.dump({'folder': sys.argv[2], 'suite': sys.argv[3], 'copyDemo': sys.argv[4] == '1'}, file)
 PY
 codesign --force --deep --sign - "$APP" >/dev/null
 echo "Built: $APP"

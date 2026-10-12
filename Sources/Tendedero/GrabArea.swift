@@ -9,10 +9,12 @@ import SwiftUI
 /// - The Trash discards it.
 /// - Nowhere that accepts it: the photo flies back to the line.
 ///
-/// Click opens, press and hold an image opens Markup, the corner cross discards.
+/// The footer button copies; the card opens or drags, an image hold opens Markup.
 struct GrabArea: NSViewRepresentable {
     let item: Pegged
     let line: Line
+    let copied: Bool
+    let copyFailed: Bool
 
     func makeNSView(context: Context) -> GrabView {
         let view = GrabView()
@@ -37,12 +39,16 @@ struct GrabArea: NSViewRepresentable {
         view.linkURL = item.linkURL
         view.dragImage = item.thumb
         view.onClick = { line.open(id) }
+        view.onCopy = { line.copy(id) }
         view.setAccessibilityElement(true)
-        view.setAccessibilityRole(.button)
+        view.setAccessibilityRole(.group)
         view.setAccessibilityLabel(item.title)
-        view.setAccessibilityHelp(item.kind == .image
-            ? L("Click to open. Drag to another app. Hold for Markup.", "Haz clic para abrir. Arrastra a otra app. Mantén pulsado para Marcación.")
-            : L("Click to open. Drag to another app.", "Haz clic para abrir. Arrastra a otra app."))
+        view.toolTip = L("Open \(item.title)", "Abrir \(item.title)")
+        view.configureAccessibility(title: item.title)
+        view.configureCopyButton(title: item.title, copied: copied, failed: copyFailed)
+        view.openElement.setAccessibilityHelp(item.kind == .image
+            ? L("Open this image. Drag the card to another app. Hold the image for Markup.", "Abre esta imagen. Arrastra la tarjeta a otra app. Mantén pulsada la imagen para Marcación.")
+            : L("Open this item. Drag the card to another app.", "Abre este elemento. Arrastra la tarjeta a otra app."))
         view.onDragStart = { line.draggingID = id }
         view.onDragEnd = {
             if line.draggingID == id { line.draggingID = nil }
@@ -91,6 +97,7 @@ final class GrabView: NSView, NSDraggingSource {
     var linkURL: URL?
     var dragImage: NSImage?
     var onClick: () -> Void = {}
+    var onCopy: () -> Void = {}
     var onDragStart: () -> Void = {}
     var onDragEnd: () -> Void = {}
     var onMoveSettled: () -> Void = {}
@@ -99,6 +106,58 @@ final class GrabView: NSView, NSDraggingSource {
     var onLongPress: () -> Void = {}
     var onPressChange: (Bool) -> Void = { _ in }
     var menuProvider: () -> NSMenu = { NSMenu() }
+
+    let copyButton = CardCopyButton()
+    lazy var openElement: CardOpenElement = {
+        let element = CardOpenElement()
+        element.setAccessibilityRole(.button)
+        element.setAccessibilityEnabled(true)
+        element.setAccessibilityParent(self)
+        element.onPress = { [weak self] in self?.onClick() }
+        return element
+    }()
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        copyButton.target = self
+        copyButton.action = #selector(copyItem)
+        copyButton.onPressChange = { [weak self] pressed in self?.onPressChange(pressed) }
+        addSubview(copyButton)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func layout() {
+        super.layout()
+        copyButton.frame = NSRect(x: max(0, bounds.width - Frame.inset - 7 - CardCopyButton.width),
+                                  y: Frame.inset + (32 - CardCopyButton.height) / 2,
+                                  width: CardCopyButton.width, height: CardCopyButton.height)
+    }
+
+    func configureAccessibility(title: String) {
+        openElement.setAccessibilityLabel(L("Open \(title)", "Abrir \(title)"))
+    }
+
+    func configureCopyButton(title: String, copied: Bool, failed: Bool) {
+        needsLayout = true
+        copyButton.title = copied ? L("Copied", "Copiado") : failed ? L("Retry", "Reintentar") : L("Copy", "Copiar")
+        copyButton.image = NSImage(systemSymbolName: copied ? "checkmark" : failed ? "exclamationmark.circle" : "doc.on.doc",
+                                   accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
+        copyButton.contentTintColor = copied ? .systemGreen : failed ? .systemOrange : .labelColor
+        copyButton.toolTip = failed
+            ? L("Could not copy this item. Click to try again.", "No se pudo copiar este elemento. Haz clic para reintentar.")
+            : L("Copy to clipboard", "Copiar al portapapeles")
+        copyButton.setAccessibilityLabel(copied ? L("Copied \(title)", "Copiado \(title)")
+            : failed ? L("Retry copying \(title)", "Reintentar copiar \(title)") : L("Copy \(title)", "Copiar \(title)"))
+    }
+
+    override func accessibilityChildren() -> [Any]? {
+        let body = NSRect(x: 0, y: 36, width: bounds.width, height: max(0, bounds.height - 36))
+        openElement.setAccessibilityFrame(window?.convertToScreen(convert(body, to: nil)) ?? .zero)
+        return [openElement, copyButton]
+    }
+
+    @objc private func copyItem() { onCopy() }
 
     private var downPoint: NSPoint?
     private var startedDrag = false
@@ -284,6 +343,39 @@ final class GrabView: NSView, NSDraggingSource {
         let w = size.width * scale, h = size.height * scale
         return NSRect(x: (bounds.width - w) / 2, y: (bounds.height - h) / 2, width: w, height: h)
     }
+}
+
+/// A real button routes copy presses independently from opening, dragging and Markup.
+final class CardCopyButton: NSButton {
+    static let width: CGFloat = 86
+    static let height: CGFloat = 24
+    var onPressChange: (Bool) -> Void = { _ in }
+
+    init() {
+        super.init(frame: .zero)
+        bezelStyle = .rounded
+        controlSize = .small
+        font = .systemFont(ofSize: 11, weight: .semibold)
+        imagePosition = .imageLeading
+        imageScaling = .scaleProportionallyDown
+        setAccessibilityElement(true)
+        setAccessibilityRole(.button)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func accessibilityChildren() -> [Any]? { [] }
+    override func accessibilityPerformPress() -> Bool { performClick(nil); return true }
+    override func mouseDown(with event: NSEvent) {
+        onPressChange(true)
+        defer { onPressChange(false) }
+        super.mouseDown(with: event)
+    }
+}
+
+final class CardOpenElement: NSAccessibilityElement {
+    var onPress: () -> Void = {}
+    override func accessibilityPerformPress() -> Bool { onPress(); return true }
 }
 
 final class ClosureMenuItem: NSMenuItem {

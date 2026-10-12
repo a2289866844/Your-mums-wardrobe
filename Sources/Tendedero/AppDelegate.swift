@@ -70,6 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.placeOnScreen()
         updateCapacity()
         line.onCapture = { [weak self] in self?.captureAdded() }
+        line.onCopyFeedback = { [weak self] in self?.capturePreview.extendForCopyFeedback(at: Date()) }
 
         if screenshotFolder == nil {
             if Inbox.isEnabled { applyInbox() }

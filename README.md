@@ -8,14 +8,14 @@ A customized macOS screenshot and clipboard shelf, based on [Alejandro Buján's 
 
 ## Install and use
 
-1. Download `Clipline-1.1.5-universal.dmg` from Releases.
+1. Download `Clipline-1.1.6-universal.dmg` from Releases.
 2. Open the disk image, drag `Clipline.app` to `Applications`, and launch it.
 3. If macOS blocks the app, open **System Settings → Privacy & Security**, find the Clipline notice, and choose **Open Anyway**. This shared build uses an ad-hoc signature and is not notarized by Apple. See [Apple's opening instructions](https://support.apple.com/guide/mac-help/mh40616/mac).
 4. Allow access to your screenshot folder when macOS asks; an update may prompt again. The paperclip in the menu bar is Clipline.
 
 Since 1.1.2, if screenshots are saved directly to Desktop during initial setup, Clipline creates a **Desktop/Screenshots** folder and directs new screenshots there. On Chinese-language systems, the folder is named **截圖**. This setting remains after quitting the app. Existing custom locations are preserved, and later manual changes are respected. Old screenshots are not moved; removing a card for this folder from the shelf does not delete its original file.
 
-Press **Control + Option + T** to show or hide the shelf. **Click a card to open its contents**; to copy it, right-click and choose **Copy**. Drag cards into other apps to share them: images and files are delivered as files, text as its full contents, and links as URLs. Text cards show a summary, but copying and dragging preserve the full text. When dragging an image or file into a folder, the destination can choose to move it; a completed move removes its card from the shelf.
+Press **Control + Option + T** to show or hide the shelf. **Click the Copy button on a card to copy its contents**; a checkmark and **Copied** confirm success. If copying fails, **Retry** lets you try again. Click the card's main area to open it; right-click still provides Copy and other actions. Drag cards into other apps to share them: images and files are delivered as files, text as its full contents, and links as URLs. Text cards show a summary, but copying and dragging preserve the full text. When dragging an image or file into a folder, the destination can choose to move it; a completed move removes its card from the shelf.
 
 Image cards open in macOS **Preview**. With **System Settings → Privacy & Security → Accessibility → Clipline** enabled, the matching image window moves to the center of the display where you clicked, keeping its current size. Clipline requests this permission once when opening an image; after granting it, click the image again. Without permission, the image still opens normally.
 

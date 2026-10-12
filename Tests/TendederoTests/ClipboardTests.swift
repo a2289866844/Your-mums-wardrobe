@@ -504,6 +504,57 @@ final class ClipboardTests: XCTestCase {
         line.copy(item.id, to: pb)
         XCTAssertEqual(pb.string(forType: .string), "keep existing copy")
         XCTAssertNil(line.copiedID)
+        XCTAssertEqual(line.copyFailedID, item.id)
+    }
+
+    @MainActor
+    func testCopyButtonPasteboardInjectionRetainsFullText() throws {
+        let pb = pasteboard()
+        let line = Line(defaults: defaults(), clipboardFolder: try folder(), copyPasteboard: pb)
+        let text = String(repeating: "Full text beyond the card preview.\n", count: 40)
+        XCTAssertTrue(line.ingestClipboard(.text(text)))
+        let item = try XCTUnwrap(line.items.first)
+        line.copy(item.id)
+        XCTAssertEqual(pb.string(forType: .string), text)
+        XCTAssertNil(pb.string(forType: .fileURL))
+        XCTAssertEqual(line.copiedID, item.id)
+        XCTAssertNil(line.copyFailedID)
+    }
+
+    @MainActor
+    func testMissingOriginalFileShowsFailureWithoutReplacingClipboard() throws {
+        let pb = pasteboard()
+        setText("keep existing clipboard", on: pb)
+        let directory = try folder()
+        let file = directory.appendingPathComponent("original.txt")
+        try Data("original".utf8).write(to: file)
+        let line = Line(defaults: defaults(), clipboardFolder: directory.appendingPathComponent("store"), copyPasteboard: pb)
+        XCTAssertTrue(line.ingestClipboard(.files([file])))
+        let item = try XCTUnwrap(line.items.first)
+        try FileManager.default.removeItem(at: file)
+        var feedbacks = 0
+        line.onCopyFeedback = { feedbacks += 1 }
+        line.copy(item.id)
+        XCTAssertEqual(pb.string(forType: .string), "keep existing clipboard")
+        XCTAssertEqual(line.copyFailedID, item.id)
+        XCTAssertNil(line.copiedID)
+        XCTAssertEqual(feedbacks, 1)
+    }
+
+    @MainActor
+    func testRepeatedCopyRestartsFeedbackInsteadOfUsingFirstCopyTimer() async throws {
+        let pb = pasteboard()
+        let line = Line(defaults: defaults(), clipboardFolder: try folder(), copyPasteboard: pb)
+        XCTAssertTrue(line.ingestClipboard(.text("repeat copy")))
+        let id = try XCTUnwrap(line.items.first?.id)
+        line.copy(id)
+        try await Task.sleep(for: .milliseconds(1200))
+        line.copy(id)
+        try await Task.sleep(for: .milliseconds(1000))
+        XCTAssertEqual(line.copiedID, id)
+        try await Task.sleep(for: .milliseconds(1200))
+        XCTAssertNil(line.copiedID)
+        XCTAssertNil(line.copyFailedID)
     }
 
 

@@ -136,10 +136,8 @@ struct PeggedView: View {
                 Image(systemName: symbol).foregroundStyle(tint)
                 Text(typeName).fontWeight(.medium)
                 Spacer(minLength: 4)
-                Text(item.kind == .image ? item.title : L("Click to open", "Clic para abrir"))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                // The native Copy button in GrabArea owns this part of the footer.
+                Color.clear.frame(width: CardCopyButton.width, height: CardCopyButton.height)
             }
             .font(.system(size: 10))
             .padding(.horizontal, 7)
@@ -162,18 +160,7 @@ struct PeggedView: View {
                 .opacity(hovering && !dragging ? 1 : 0)
                 .allowsHitTesting(false)
         }
-        .overlay(GrabArea(item: item, line: line))
-        .overlay(alignment: .bottom) {
-            if copied {
-                Label(L("Copied", "Copiado"), systemImage: "checkmark")
-                    .font(.system(size: 11, weight: .semibold))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .glassFrame(capsule: true)
-                    .offset(y: 16)
-                    .transition(.opacity)
-            }
-        }
+        .overlay(GrabArea(item: item, line: line, copied: copied, copyFailed: line.copyFailedID == item.id))
         .animation(.easeOut(duration: 0.18), value: hovering)
         .animation(.easeOut(duration: 0.2), value: copied)
         .onHover { hovering = $0 }
