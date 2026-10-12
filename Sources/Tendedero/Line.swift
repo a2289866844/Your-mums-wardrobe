@@ -388,7 +388,8 @@ final class Line: ObservableObject {
 
     func open(_ id: UUID) {
         guard let item = items.first(where: { $0.id == id }) else { return }
-        NSWorkspace.shared.open(item.linkURL ?? item.url)
+        if item.kind == .image { PreviewWindowCenterer.shared.open(item.url) }
+        else { NSWorkspace.shared.open(item.linkURL ?? item.url) }
     }
 
     /// Moves the file to the Trash and takes the photo off the line. When a

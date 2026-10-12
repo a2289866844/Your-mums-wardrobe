@@ -22,6 +22,9 @@ MainActor.assumeIsolated {
     let resource = Bundle.main.url(forResource: "Runtime", withExtension: "plist")!
     let configuration = NSDictionary(contentsOf: resource)!
     let runtime = URL(fileURLWithPath: configuration["folder"] as! String, isDirectory: true)
+    PreviewWindowCenterer.shared.onResult = { status in
+        try? Data(status.rawValue.utf8).write(to: runtime.appendingPathComponent("preview-centering.txt"), options: .atomic)
+    }
     let suite = configuration["suite"] as! String
     let defaults = UserDefaults(suiteName: suite)!
     defaults.set(true, forKey: "soundOff")
