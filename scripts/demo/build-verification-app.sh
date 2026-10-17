@@ -3,7 +3,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT="$PWD"
-APP="${1:-$ROOT/build/Clipline Verification.app}"
+APP="${1:-$ROOT/build/wardrobe Verification.app}"
 mkdir -p "$ROOT/build"
 if [[ -e "$APP" ]]; then
   echo "Verification app already exists; retain it or move it before rebuilding." >&2
@@ -81,7 +81,7 @@ MainActor.assumeIsolated {
             let file = runtime.appendingPathComponent("Example.txt")
             try? Data("A synthetic file for Copy verification.\n".utf8).write(to: file)
             _ = line.ingestClipboard(.files([file]))
-            if let icon = Bundle.main.url(forResource: "Clipline", withExtension: "png"),
+            if let icon = Bundle.main.url(forResource: "wardrobe", withExtension: "png"),
                let data = try? Data(contentsOf: icon) { _ = line.ingestClipboard(.image(data)) }
         }
     }
@@ -93,17 +93,17 @@ for source in Sources/Tendedero/*.swift; do
   [[ "$source" == "Sources/Tendedero/main.swift" ]] || SOURCES+=("$source")
 done
 xcrun swiftc -O -module-name Tendedero -target "$(uname -m)-apple-macosx14.0" \
-  "${SOURCES[@]}" "$WORK/main.swift" -o "$WORK/CliplineVerification"
+  "${SOURCES[@]}" "$WORK/main.swift" -o "$WORK/wardrobeVerification"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$WORK/CliplineVerification" "$APP/Contents/MacOS/CliplineVerification"
-cp docs/clipline-icon.png "$APP/Contents/Resources/Clipline.png"
+cp "$WORK/wardrobeVerification" "$APP/Contents/MacOS/wardrobeVerification"
+cp docs/clipline-icon.png "$APP/Contents/Resources/wardrobe.png"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleExecutable</key><string>CliplineVerification</string>
+<key>CFBundleExecutable</key><string>wardrobeVerification</string>
 <key>CFBundleIdentifier</key><string>io.github.a2289866844.clipline.verification</string>
-<key>CFBundleName</key><string>Clipline Verification</string>
+<key>CFBundleName</key><string>wardrobe Verification</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>1.1.6</string>
 <key>CFBundleVersion</key><string>1</string>

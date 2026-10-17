@@ -228,14 +228,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard screenshotFolder == nil else { return }
         Inbox.wasOffered = true
         let alert = NSAlert()
-        alert.messageText = L("Let Clipline handle your screenshots?",
-                              "¿Quieres que Clipline se encargue de tus capturas?")
+        alert.messageText = L("Let wardrobe handle your screenshots?",
+                              "¿Quieres que wardrobe se encargue de tus capturas?")
         alert.informativeText = L(
-            "Screenshots will hang on the line the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. Drag one to a folder to keep it, or discard it with the cross. You can turn this off from the menu bar, and your settings come back when Clipline quits.",
-            "Las capturas se colgarán al instante, sin la miniatura flotante, y no se acumularán en el Escritorio. Arrastra una a una carpeta para guardarla, o descártala con la cruz. Puedes desactivarlo desde la barra de menús, y tus ajustes vuelven a ser los de antes al salir de Clipline.")
+            "Screenshots will hang on the line the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. Drag one to a folder to keep it, or discard it with the cross. You can turn this off from the menu bar, and your settings come back when wardrobe quits.",
+            "Las capturas se colgarán al instante, sin la miniatura flotante, y no se acumularán en el Escritorio. Arrastra una a una carpeta para guardarla, o descártala con la cruz. Puedes desactivarlo desde la barra de menús, y tus ajustes vuelven a ser los de antes al salir de wardrobe.")
         alert.addButton(withTitle: L("Turn on", "Activar"))
         alert.addButton(withTitle: L("Not now", "Ahora no"))
-        if let icon = NSImage(named: "Clipline") ?? NSApp.applicationIconImage { alert.icon = icon }
+        if let icon = NSImage(named: "wardrobe") ?? NSApp.applicationIconImage { alert.icon = icon }
         NSApp.activate(ignoringOtherApps: true)
         if alert.runModal() == .alertFirstButtonReturn { setInbox(true) }
     }
@@ -591,7 +591,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setUpStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: "Clipline")
+        let image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: "wardrobe")
         image?.isTemplate = true
         statusItem.button?.image = image
         let menu = NSMenu()
@@ -655,7 +655,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(login)
 
         menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem(L("Quit Clipline", "Salir de Clipline"), key: "q") {
+        menu.addItem(ClosureMenuItem(L("Quit wardrobe", "Salir de wardrobe"), key: "q") {
             NSApp.terminate(nil)
         })
     }
@@ -670,8 +670,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             let alert = NSAlert()
             alert.messageText = L("Could not change the login setting", "No se pudo cambiar el inicio de sesión")
-            alert.informativeText = L("Move Clipline to the Applications folder and try again.",
-                                      "Mueve Clipline a la carpeta Aplicaciones y vuelve a intentarlo.")
+            alert.informativeText = L("Move wardrobe to the Applications folder and try again.",
+                                      "Mueve wardrobe a la carpeta Aplicaciones y vuelve a intentarlo.")
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
         }

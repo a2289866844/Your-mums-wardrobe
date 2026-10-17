@@ -1,4 +1,4 @@
-# Local Clipline demo fixture
+# Local wardrobe demo fixture
 
 This scene contains only synthetic travel content and a sample conversation. The composer accepts actual image files from a native drag. It creates a browser-local preview using an object URL; it never uploads or sends anything. The disabled send button is intentional.
 
@@ -14,13 +14,13 @@ Start the page from the repository root:
 python3 -m http.server 8765 --bind 127.0.0.1 --directory scripts/demo
 ```
 
-Open `http://127.0.0.1:8765` in a browser. A 1440 × 900 screen is ideal; a 1280 × 800 screen also fits the scene. Use a single browser window and close private tabs or other visible windows before recording. Select the travel card on the left for a macOS region screenshot; drop the resulting native Clipline item in the dashed composer on the right. The resulting image preview and “Screenshot attached” label provide a visible endpoint.
+Open `http://127.0.0.1:8765` in a browser. A 1440 × 900 screen is ideal; a 1280 × 800 screen also fits the scene. Use a single browser window and close private tabs or other visible windows before recording. Select the travel card on the left for a macOS region screenshot; drop the resulting native wardrobe item in the dashed composer on the right. The resulting image preview and “Screenshot attached” label provide a visible endpoint.
 
 Suggested 12–15 second sequence:
 
 1. Hold the page still for about one second.
 2. Capture the left travel card with the native region screenshot interaction.
-3. Let Clipline reveal the new item, then drag that item into the right composer.
+3. Let wardrobe reveal the new item, then drag that item into the right composer.
 4. Hold the attached preview for two seconds.
 
 At a browser content viewport of 1440 × 780, the left card starts 48 pixels from the content area's left edge, while the chat occupies the right side. Inspect the live CUA screenshot for the exact card and composer rectangles and add the observed browser chrome/window origin. At narrower widths, layout adapts. Capture the actual native shelf in the recording crop if it appears above or alongside the browser. Do not infer screen coordinates from this document.
