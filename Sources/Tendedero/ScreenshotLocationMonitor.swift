@@ -1,6 +1,6 @@
 import Foundation
 
-/// Follow changes made in macOS Screenshot Options while Clipline is running.
+/// Follow changes made in macOS Screenshot Options while wardrobe is running.
 @MainActor
 final class ScreenshotLocationMonitor {
     private let resolve: () -> URL
