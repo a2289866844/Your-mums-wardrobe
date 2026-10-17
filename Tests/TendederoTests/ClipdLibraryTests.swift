@@ -428,6 +428,100 @@ final class ClipdLibraryTests: XCTestCase {
         XCTAssertEqual(try library.store.pendingImageOCRIDs(), [image.id], "Visible shelf pauses OCR, while text storage remains independent")
     }
 
+    func testQueuedWatcherCopiesPreserveOrderAndEachCopiesOwnRichFormats() async throws {
+        let (line, library, output, _) = try fixture()
+        defer { library.stop() }
+        try library.connect(to: line, trackApplications: false)
+        library.setOCRPaused(true)
+        let input = NSPasteboard.withUniqueName()
+        defer { input.releaseGlobally() }
+        let watcher = ClipboardWatcher(pasteboard: input,
+            onTextFormats: { line.capturedTextFormats = $0 },
+            onNew: { line.ingestClipboardInBackground($0) })
+        func submit(_ text: String, html: Data? = nil, rtf: Data? = nil, image: Data? = nil) {
+            let item = NSPasteboardItem()
+            item.setString(text, forType: .string)
+            if let html { item.setData(html, forType: .html) }
+            if let rtf { item.setData(rtf, forType: .rtf) }
+            if let image { item.setData(image, forType: .png) }
+            input.clearContents()
+            input.writeObjects([item])
+            watcher.poll()
+        }
+        XCTAssertTrue(line.ingestClipboardInBackground(.image(try imageData())))
+        let firstHTML = Data("<b>First rich copy</b>".utf8)
+        let firstRTF = Data(#"{\rtf1\ansi First rich copy}"#.utf8)
+        let secondHTML = Data("<i>Second rich copy</i>".utf8)
+        let secondRTF = Data(#"{\rtf1\ansi Second rich copy}"#.utf8)
+        submit("First rich copy", html: firstHTML, rtf: firstRTF)
+        // Malformed image representations must keep the rich text fallback.
+        submit("Second rich copy", html: secondHTML, rtf: secondRTF, image: Data("not a PNG".utf8))
+        submit("https://example.com/queued-link", html: Data("<a>Link</a>".utf8))
+        submit("Final plain copy")
+        XCTAssertTrue(line.items.isEmpty, "Later text must wait for the first image")
+        XCTAssertTrue(line.capturedTextFormats.isEmpty, "Watcher callback state is ephemeral")
+        await line.waitForClipboardPreparation()
+        await library.waitForWrites()
+        XCTAssertEqual(line.items.map(\.kind), [.image, .text, .text, .link, .text])
+        XCTAssertEqual(try library.store.count(), 5)
+        for (index, text, html, rtf) in [(1, "First rich copy", firstHTML, firstRTF),
+                                       (2, "Second rich copy", secondHTML, secondRTF)] {
+            line.copy(line.items[index].id)
+            XCTAssertEqual(output.string(forType: .string), text)
+            XCTAssertEqual(output.data(forType: .html), html)
+            XCTAssertEqual(output.data(forType: .rtf), rtf)
+            XCTAssertTrue((output.types ?? []).contains(ClipboardWatcher.ownCopyType))
+        }
+        line.copy(line.items[3].id)
+        XCTAssertEqual(output.string(forType: .URL), "https://example.com/queued-link")
+        XCTAssertEqual(output.data(forType: .html), Data("<a>Link</a>".utf8))
+        line.copy(line.items[4].id)
+        XCTAssertEqual(output.string(forType: .string), "Final plain copy")
+        XCTAssertFalse((output.types ?? []).contains(.html))
+        XCTAssertFalse((output.types ?? []).contains(.rtf))
+    }
+
+    func testCancellationDropsQueuedRichArchiveAndFreshCopyDoesNotInheritFormats() async throws {
+        let (line, library, output, _) = try fixture()
+        defer { library.stop() }
+        try library.connect(to: line, trackApplications: false)
+        library.setOCRPaused(true)
+        XCTAssertTrue(line.ingestClipboardInBackground(.image(try imageData())))
+        line.capturedTextFormats = [CapturedTextFormat(uti: "public.html", data: Data("<b>Cancelled</b>".utf8))]
+        XCTAssertTrue(line.ingestClipboardInBackground(.text("Cancelled rich copy")))
+        line.capturedTextFormats = []
+        line.cancelClipboardPreparation()
+        XCTAssertTrue(line.ingestClipboardInBackground(.text("Fresh plain copy")))
+        await line.waitForClipboardPreparation()
+        await library.waitForWrites()
+        XCTAssertEqual(try library.store.count(), 1)
+        XCTAssertEqual(line.items.map(\.kind), [.text])
+        let card = try XCTUnwrap(line.items.first)
+        line.copy(card.id)
+        XCTAssertEqual(output.string(forType: .string), "Fresh plain copy")
+        XCTAssertFalse((output.types ?? []).contains(.html))
+        XCTAssertTrue(try library.store.search("Cancelled", limit: 10).isEmpty)
+    }
+
+    func testQueuedTextArchivesCaptureTimeAndSourceInsteadOfPublicationContext() async throws {
+        let (line, library, _, _) = try fixture()
+        defer { library.stop() }
+        try library.connect(to: line, trackApplications: false)
+        library.setOCRPaused(true)
+        XCTAssertTrue(line.ingestClipboardInBackground(.image(try imageData())))
+        let capturedAt = Date(timeIntervalSince1970: 1_780_000_000)
+        let context = ClipboardCaptureContext(capturedAt: capturedAt,
+            sourceBundleID: "test.copied-from", sourceAppName: "Copied From App")
+        XCTAssertTrue(line.ingestClipboardInBackground(.text("Context belongs to the copy"), captureContext: context))
+        await line.waitForClipboardPreparation()
+        await library.waitForWrites()
+        let record = try XCTUnwrap(try library.store.search("Context", limit: 10).first)
+        XCTAssertEqual(record.capturedAt.timeIntervalSince1970, capturedAt.timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(record.sourceBundleID, context.sourceBundleID)
+        XCTAssertEqual(record.sourceAppName, context.sourceAppName)
+        XCTAssertEqual(line.items.last?.content.sourceAppName, context.sourceAppName)
+    }
+
     private func imageData() throws -> Data {
         let bitmap = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 32, pixelsHigh: 24,
             bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,

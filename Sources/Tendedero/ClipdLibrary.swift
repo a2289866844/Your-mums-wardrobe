@@ -18,6 +18,20 @@ struct CapturedTextFormat: Sendable {
     let data: Data
 }
 
+/// Metadata belongs to the copy operation, before queued preparation can delay it.
+struct ClipboardCaptureContext: Sendable {
+    let capturedAt: Date
+    let sourceBundleID: String?
+    let sourceAppName: String?
+
+    @MainActor
+    static func current() -> Self {
+        let source = NSWorkspace.shared.frontmostApplication
+        return Self(capturedAt: Date(), sourceBundleID: source?.bundleIdentifier,
+                    sourceAppName: source?.localizedName)
+    }
+}
+
 /// Clipline owns the UI and capture; ClipdCore owns the archive and its text index.
 /// No Clipd panel, hot corner, upload queue, or knowledge-base process is started.
 @MainActor
@@ -168,19 +182,19 @@ final class ClipdLibrary {
         ring.stop()
     }
 
-    func archive(_ card: Pegged, importing: Bool = false, textFormats: [CapturedTextFormat] = [], fullText: String? = nil) {
+    func archive(_ card: Pegged, importing: Bool = false, textFormats: [CapturedTextFormat] = [], fullText: String? = nil, captureContext: ClipboardCaptureContext? = nil) {
         guard card.content.historyID == nil, let line, !line.archivingIDs.contains(card.id) else { return }
         line.archivingIDs.insert(card.id)
-        let source = importing ? nil : NSWorkspace.shared.frontmostApplication
-        let sourceID = source?.bundleIdentifier
-        let sourceName = source?.localizedName
+        let context = importing ? nil : (captureContext ?? .current())
+        let sourceID = context?.sourceBundleID
+        let sourceName = context?.sourceAppName
         let previous = pendingWrite
         let store = store, coordinator = coordinator, root = directory
         let url = card.url, kind = card.kind, title = card.title
         let link = card.linkURL?.absoluteString
         let id = card.id
         let capturedAt = importing
-            ? ((try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()) : Date()
+            ? ((try? url.resourceValues(forKeys: [.creationDateKey]).creationDate) ?? Date()) : (context?.capturedAt ?? Date())
         pendingWrite = Task { [weak self, weak line] in
             await previous?.value
             do {

@@ -79,6 +79,7 @@ final class Line: ObservableObject {
     @Published var libraryStatus = ""
     var capturedTextFormats: [CapturedTextFormat] = []
     private var pendingText: [UUID: String] = [:]
+    private var applyingCaptureContext: ClipboardCaptureContext?
     @Published var searchFocused = false
     @Published private(set) var libraryResults: [Pegged] = []
     var archivingIDs = Set<UUID>() { didSet { interactionChanged() } }
@@ -309,6 +310,17 @@ final class Line: ObservableObject {
     private let copyPasteboard: NSPasteboard
     private var copyFeedbackToken = UUID()
     private let clipboardStore: ClipboardStore
+    private let clipboardPreparation: ClipboardPreparation
+    private var clipboardPreparationGeneration = 0
+    private struct PendingClipboard {
+        let id = UUID()
+        let payload: ClipboardPayload
+        let textFormats: [CapturedTextFormat]
+        let context: ClipboardCaptureContext
+        var retries = 2
+    }
+    private var pendingClipboard: [PendingClipboard] = []
+    private var clipboardPreparationActive = false
     private var dropCompletionTokens: [UUID: UUID] = [:]
     private var originalClipboardFiles: Set<URL> = []
     private struct ClipboardFileLease: Codable {
@@ -319,7 +331,6 @@ final class Line: ObservableObject {
     private var clipboardFileLease: ClipboardFileLease?
     private var clipboardLeaseTimer: Timer?
     private let clipboardLeaseKey = "clipboardFileLease"
-    private lazy var clipboardPreparation = ClipboardPreparation(store: clipboardStore)
 
     var soundOn: Bool {
         get { !defaults.bool(forKey: "soundOff") }
@@ -331,10 +342,11 @@ final class Line: ObservableObject {
     private let storeKey = "pegged"
 
     init(defaults: UserDefaults = .standard, clipboardFolder: URL = ClipboardStore.defaultFolder,
-         copyPasteboard: NSPasteboard = .general) {
+         copyPasteboard: NSPasteboard = .general, clipboardPreparation: ClipboardPreparation? = nil) {
         self.defaults = defaults
         self.copyPasteboard = copyPasteboard
         clipboardStore = ClipboardStore(folder: clipboardFolder)
+        self.clipboardPreparation = clipboardPreparation ?? ClipboardPreparation(store: clipboardStore)
         originalClipboardFiles = Set((defaults.stringArray(forKey: "clipboardOriginalFiles") ?? [])
             .map { URL(fileURLWithPath: $0).standardizedFileURL }
             .filter { FileManager.default.fileExists(atPath: $0.path) })
@@ -371,7 +383,8 @@ final class Line: ObservableObject {
     private func append(_ item: Pegged, quietly: Bool = false) {
         if pageEndID == nil && !showingLibraryResults { pageWindowCount = nil }
         items.append(item)
-        library?.archive(item, textFormats: capturedTextFormats, fullText: pendingText[item.id])
+        library?.archive(item, textFormats: item.kind == .text || item.kind == .link ? capturedTextFormats : [],
+                         fullText: pendingText[item.id], captureContext: applyingCaptureContext)
         enforceCapacity()
         save()
         if !quietly {
@@ -484,7 +497,7 @@ final class Line: ObservableObject {
     func ingestClipboard(_ payload: ClipboardPayload) -> Bool {
         prune()
         switch payload {
-        case .image, .files:
+        case .image, .imageRepresentations, .files:
             return applyPreparedClipboard(clipboardPreparation.prepareSynchronously(payload, candidates: imageCandidates))
         case .text(let text):
             guard !text.isEmpty, text.utf8.count <= ClipboardStore.textLimit else { return false }
@@ -545,45 +558,111 @@ final class Line: ObservableObject {
         }
     }
 
-    private var imageCandidates: [URL] { items.filter { !$0.falling && $0.kind == .image }.map(\.url) }
+    private var imageCandidates: [URL] {
+        items.filter { !$0.falling && $0.kind == .image }.map(\.url)
+    }
 
-    /// Main-thread clipboard reads stop at immutable data; conversion, hashing,
-    /// deduplication and generated-file writes all happen on the worker.
-    func ingestClipboardInBackground(_ payload: ClipboardPayload) -> Bool {
-        switch payload {
-        case .image, .files:
-            prune()
-            clipboardPreparation.prepare(payload, candidates: imageCandidates) { [weak self] result in
-                guard let self else { return }
-                let accepted = self.applyPreparedClipboard(result)
-                // A candidate can be dismissed while preparation is in flight.
-                if !accepted, case .duplicate = result { _ = self.ingestClipboardInBackground(payload) }
+    /// Production clipboard capture returns immediately; only immutable results
+    /// come back to the main actor. All payloads share the queue to retain order.
+    @discardableResult
+    func ingestClipboardInBackground(_ payload: ClipboardPayload, captureContext: ClipboardCaptureContext? = nil) -> Bool {
+        let context = captureContext ?? .current()
+        // Finder references become originals before yielding, even when the
+        // prior card is already falling and its cleanup deadline is near.
+        if case .files(let urls) = payload {
+            var upgraded = false
+            for url in urls where url.isFileURL && FileManager.default.fileExists(atPath: url.path) {
+                protectOriginal(url)
+                let original = url.resolvingSymlinksInPath().standardizedFileURL
+                for index in items.indices where items[index].url.resolvingSymlinksInPath().standardizedFileURL == original
+                    && items[index].content.originalFileReference != true {
+                    items[index].content.originalFileReference = true
+                    upgraded = true
+                }
             }
-            return true
-        default: return ingestClipboard(payload)
+            if upgraded { save() }
+        }
+        pendingClipboard.append(PendingClipboard(payload: payload, textFormats: capturedTextFormats, context: context))
+        prepareNextClipboard()
+        return true
+    }
+
+    private func prepareNextClipboard() {
+        guard !clipboardPreparationActive, let request = pendingClipboard.first else { return }
+        clipboardPreparationActive = true
+        let generation = clipboardPreparationGeneration
+        clipboardPreparation.prepare(request.payload, candidates: imageCandidates) { [weak self] result in
+            guard let self else { return }
+            defer {
+                self.clipboardPreparationActive = false
+                self.prepareNextClipboard()
+            }
+            guard self.clipboardPreparationGeneration == generation,
+                  self.pendingClipboard.first?.id == request.id else { return }
+            self.prune()
+            guard self.clipboardPreparationGeneration == generation,
+                  self.pendingClipboard.first?.id == request.id else { return }
+            let accepted = self.applyPreparedClipboard(result, generation: generation, textFormats: request.textFormats, captureContext: request.context)
+            // onCapture can pause capture or enqueue another payload synchronously.
+            guard self.clipboardPreparationGeneration == generation,
+                  self.pendingClipboard.first?.id == request.id else { return }
+            var retry = false
+            if !accepted, request.retries > 0 {
+                switch result {
+                case .duplicate?, .image?, .files?: retry = true
+                default: break
+                }
+            }
+            if retry { self.pendingClipboard[0].retries -= 1 }
+            else { self.pendingClipboard.removeFirst() }
+            // Retry the same logical capture before newer captures are prepared.
         }
     }
 
-    func waitForClipboardPreparation() async { await clipboardPreparation.waitUntilIdle() }
+    func cancelClipboardPreparation() {
+        clipboardPreparationGeneration += 1
+        pendingClipboard.removeAll()
+    }
+
+    func waitForClipboardPreparation() async {
+        while clipboardPreparationActive || !pendingClipboard.isEmpty {
+            await clipboardPreparation.waitUntilIdle()
+        }
+    }
 
     private func hasImage(with digest: String) -> Bool {
         items.contains { !$0.falling && $0.kind == .image && clipboardPreparation.cachedDigest($0.url) == digest }
     }
 
-    private func applyPreparedClipboard(_ result: ClipboardPreparation.Result?) -> Bool {
+    private func applyPreparedClipboard(_ result: ClipboardPreparation.Result?, generation: Int? = nil,
+                                        textFormats: [CapturedTextFormat]? = nil,
+                                        captureContext: ClipboardCaptureContext? = nil) -> Bool {
         guard let result else { return false }
+        // Watcher callbacks reset their formats immediately after enqueueing.
+        // Restore this capture's immutable snapshot only while archiving it.
+        let previousContext = applyingCaptureContext
+        applyingCaptureContext = captureContext ?? previousContext
+        defer { applyingCaptureContext = previousContext }
+        let previousFormats = capturedTextFormats
+        if let textFormats { capturedTextFormats = textFormats }
+        defer { capturedTextFormats = previousFormats }
         switch result {
+        case .passthrough(let payload): return ingestClipboard(payload)
         case .duplicate(let digest): return hasImage(with: digest)
         case .image(let image):
-            guard let digest = image.digest, let thumbnail = image.thumbnail else { return false }
+            guard let digest = image.digest, let thumbnail = image.thumbnail,
+                  ClipboardPreparation.FileVersion.read(image.url) == image.version else { return false }
             if hasImage(with: digest) { return true }
             var content = ShelfContent.image(image.url, digest: digest)
             content.title = "Copied image"
-            append(Pegged(url: image.url, thumb: NSImage(cgImage: thumbnail, size: NSSize(width: thumbnail.width, height: thumbnail.height)), content: content))
+            append(Pegged(url: image.url, thumb: NSImage(cgImage: thumbnail,
+                size: NSSize(width: thumbnail.width, height: thumbnail.height)), content: content))
             return true
         case .files(let files):
             var accepted = false
-            for file in files where FileManager.default.fileExists(atPath: file.url.path) {
+            for file in files {
+                if let generation, generation != clipboardPreparationGeneration { return accepted }
+                guard ClipboardPreparation.FileVersion.read(file.url) == file.version else { return false }
                 protectOriginal(file.url)
                 let original = file.url.resolvingSymlinksInPath().standardizedFileURL
                 if let index = items.firstIndex(where: { $0.url.resolvingSymlinksInPath().standardizedFileURL == original && !$0.falling }) {
@@ -599,7 +678,8 @@ final class Line: ObservableObject {
                     kind: .file, title: file.url.lastPathComponent,
                     subtitle: file.url.pathExtension.isEmpty ? "File" : file.url.pathExtension.uppercased())
                 content.originalFileReference = true
-                let thumbnail = file.thumbnail.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
+                let thumbnail = file.thumbnail.map { NSImage(cgImage: $0,
+                    size: NSSize(width: $0.width, height: $0.height)) }
                     ?? NSWorkspace.shared.icon(forFile: file.url.path)
                 append(Pegged(url: file.url, thumb: thumbnail, content: content))
                 accepted = true

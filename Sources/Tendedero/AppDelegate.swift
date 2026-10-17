@@ -10,10 +10,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let screenshotMonitoringStartedAt = Date()
     private let line: Line
     private let defaults: UserDefaults
+    private let capturePasteboard: NSPasteboard
     /// Verification hosts can watch a dedicated fixture folder without
     /// reading Desktop or changing the user's screenshot preferences.
     private let screenshotFolder: URL?
-    private let capturePasteboard: NSPasteboard
     private var panel: LinePanel!
     private var statusItem: NSStatusItem!
     private var watcher: ScreenshotWatcher!
@@ -65,9 +65,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
          capturePasteboard: NSPasteboard = .general) {
         self.line = line ?? Line()
         self.defaults = defaults
+        self.capturePasteboard = capturePasteboard
         self.screenshotFolder = screenshotFolder
         self.library = library
-        self.capturePasteboard = capturePasteboard
         super.init()
     }
 
@@ -198,6 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         libraryStartupTask?.cancel()
         library?.stop()
         clipboardWatcher?.stop()
+        line.cancelClipboardPreparation()
         watcher?.stop()
         screenshotThumbnails.cancelAll()
         screenshotLocationMonitor?.stop()
@@ -216,6 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         defaults.set(enabled, forKey: "clipboardEnabled")
         clipboardWatcher?.stop()
         clipboardWatcher = nil
+        line.cancelClipboardPreparation()
         guard enabled else { return }
         let watcher = ClipboardWatcher(pasteboard: capturePasteboard, onTextFormats: { [weak self] formats in self?.line.capturedTextFormats = formats }) { [weak self] payload in
             self?.line.ingestClipboardInBackground(payload) ?? false

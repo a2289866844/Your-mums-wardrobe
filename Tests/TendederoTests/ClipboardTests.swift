@@ -137,6 +137,37 @@ final class ClipboardTests: XCTestCase {
     }
 
     @MainActor
+    func testRichFormatProviderRaceCannotQueueReplacementPrivateCopy() {
+        let board = pasteboard()
+        var deliveries = 0, formatDeliveries = 0, replacementReads = 0
+        let watcher = ClipboardWatcher(pasteboard: board,
+            onTextFormats: { if !$0.isEmpty { formatDeliveries += 1 } },
+            onNew: { _ in deliveries += 1; return true })
+        let privateProvider = ClipboardTestProvider { _, item, type in
+            replacementReads += 1
+            item.setString("private replacement", forType: type)
+        }
+        let formatProvider = ClipboardTestProvider { pasteboard, item, type in
+            item.setData(Data(#"{\rtf1 stale}"#.utf8), forType: type)
+            let replacement = NSPasteboardItem()
+            replacement.setString("1", forType: .init("org.nspasteboard.ConcealedType"))
+            replacement.setDataProvider(privateProvider, forTypes: [.string, .html])
+            pasteboard.clearContents()
+            pasteboard.writeObjects([replacement])
+        }
+        let first = NSPasteboardItem()
+        first.setString("ordinary text before replacement", forType: .string)
+        first.setDataProvider(formatProvider, forTypes: [.rtf])
+        board.clearContents()
+        board.writeObjects([first])
+        watcher.poll()
+        watcher.poll()
+        XCTAssertEqual(deliveries, 0)
+        XCTAssertEqual(formatDeliveries, 0)
+        XCTAssertEqual(replacementReads, 0, "A replacement private board must not be read for fallback rich formats")
+    }
+
+    @MainActor
     func testFilesHavePriorityOverTheirImageRepresentation() throws {
         let pb = pasteboard()
         var payloads: [ClipboardPayload] = []
@@ -163,7 +194,7 @@ final class ClipboardTests: XCTestCase {
         pb.clearContents()
         pb.setData(try png(), forType: .png)
         watcher.poll()
-        guard case .image = payloads.first else { return XCTFail("Expected image") }
+        guard case .imageRepresentations = payloads.first else { return XCTFail("Expected encoded image representations") }
         setText("https://example.com/path", on: pb)
         watcher.poll()
         guard case .link(let url) = payloads.last else { return XCTFail("Expected link") }

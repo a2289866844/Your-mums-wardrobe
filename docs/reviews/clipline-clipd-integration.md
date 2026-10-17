@@ -31,7 +31,18 @@ The ClipdCore sources are compiled as a local SwiftPM target. The separate Clipd
 
 History, Chinese/OCR search, pins, text editing, full-content Copy, drag, automatic reveal/retract, idle sway and sounds remain. Image Markup, Preview-window centering, screenshot-location takeover, sequential copying and abbreviation expansion are absent from this preview. Images open in the system default application; the watcher follows the macOS screenshot folder. Upload/knowledge-base services and automatic retention sweeps are not started by the integration.
 
-## Verification for this publication
+## PR integration verification — October 17, 2026
+
+The 1.2 source now combines the clipboard-preparation changes with the archive integration. All clipboard payloads retain capture order while images are prepared on the worker. Each queued item carries its own immutable rich representations, source application and capture timestamp. Cancellation and stale-result checks preserve original-file protections.
+
+- Full verification passed **201 wardrobe XCTest tests** and **253 ClipdCore Swift Testing tests**, with zero failures.
+- Integration regressions cover image → rich text → malformed-image rich-text fallback → link → plain-text ordering; exact HTML/RTF and own-copy-marker readback; cancellation without format leakage; original capture-time/source metadata; and a lazy rich-format provider replacing the clipboard with private content.
+- The universal arm64/x86_64 production app and embedded SQLCipher framework built and passed strict nested signature verification.
+- A native isolated fixture delivered a synthetic **4000 × 3000 PNG** through the actual clipboard watcher into the archive. Clicking the real Copy button showed **Copied**, retained both full dimensions and the own-copy marker, and returned the archived PNG bytes. The archived image’s decoded pixels matched the source exactly; normalization changed only its PNG encoding.
+
+Rich-text checks above are automated archive/readback tests. Native interaction ran on Apple Silicon with private fixture storage, folders, pasteboard and preferences. The merge does not replace the installed application or publish a new installer.
+
+## Original source-publication verification
 
 Fresh verification on October 16, 2026 used this self-contained checkout:
 

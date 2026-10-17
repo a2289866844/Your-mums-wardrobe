@@ -28,11 +28,15 @@ final class CopyDemoAction: NSObject {
     var run: () -> Void = {}
     var copyFixture: () -> Void = {}
     var createScreenshot: () -> Void = {}
+    var captureLargeImage: () -> Void = {}
+    var captureRichText: () -> Void = {}
     var resetPerformance: () -> Void = {}
     var startBenchmark: () -> Void = {}
     @objc func showCards() { run() }
     @objc func copyFixtureText() { copyFixture() }
     @objc func addScreenshot() { createScreenshot() }
+    @objc func addLargeImage() { captureLargeImage() }
+    @objc func addRichText() { captureRichText() }
     @objc func resetProbe() { resetPerformance() }
     @objc func benchmark() { startBenchmark() }
 }
@@ -155,7 +159,34 @@ MainActor.assumeIsolated {
     var benchmarkTimer: Timer?
     if copyDemo || captureDemo {
         let fullText = "Copy in one click\n" + String(repeating: "The full text is copied, including content beyond this preview.\n", count: 20)
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: captureDemo ? 300 : 260, height: performanceDemo ? 280 : (captureDemo ? 180 : 100)),
+        let richText = "Rich text capture fixture\n" + String(repeating: "Full archived text with 中文 and formatting beyond the card preview.\n", count: 32) + "END OF RICH TEXT FIXTURE"
+        let richHTML = Data(("<!doctype html><html><body><pre><strong>" + richText + "</strong></pre></body></html>").utf8)
+        let attributed = NSAttributedString(string: richText, attributes: [.font: NSFont.boldSystemFont(ofSize: 18)])
+        let richRTF = try! attributed.data(from: NSRange(location: 0, length: attributed.length), documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf])
+        var expectedPNG: Data?
+        var fixtureSequence = 0
+        // Inputs and metadata belong only to this disposable runtime. The watcher
+        // receives these through its private board, never through direct ingestion.
+        func recordInput(action: String, representations: [(NSPasteboard.PasteboardType, Data)], success: Bool, extra: [String: Any] = [:]) {
+            fixtureSequence += 1
+            let inputs = runtime.appendingPathComponent("Inputs", isDirectory: true)
+            try! FileManager.default.createDirectory(at: inputs, withIntermediateDirectories: true)
+            var entries: [[String: Any]] = []
+            for (index, representation) in representations.enumerated() {
+                let file = "\(fixtureSequence)-\(action)-\(index).data"
+                try! representation.1.write(to: inputs.appendingPathComponent(file), options: .atomic)
+                entries.append(["uti": representation.0.rawValue, "byteCount": representation.1.count,
+                                "sha256": ClipboardStore.digest(representation.1), "file": "Inputs/" + file])
+            }
+            var result: [String: Any] = ["action": action, "sequence": fixtureSequence, "success": success,
+                "timestamp": Date().timeIntervalSince1970, "pasteboardChangeCount": copyBoard.changeCount,
+                "representations": entries, "delivery": "private pasteboard; ordinary ClipboardWatcher timer"]
+            result.merge(extra) { _, new in new }
+            let data = try! JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
+            try! data.write(to: runtime.appendingPathComponent("capture-action.json"), options: .atomic)
+            try! data.write(to: inputs.appendingPathComponent("\(fixtureSequence)-\(action).json"), options: .atomic)
+        }
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: captureDemo ? 300 : 260, height: performanceDemo ? 280 : (captureDemo ? 272 : 100)),
                               styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = captureDemo ? "Capture verification" : "Copy verification"
         window.identifier = .init("clipline-verification-controls")
@@ -207,6 +238,47 @@ MainActor.assumeIsolated {
                                            "file": destination.lastPathComponent, "timestamp": Date().timeIntervalSince1970]
                 if let data = try? JSONSerialization.data(withJSONObject: result, options: [.sortedKeys]) {
                     try? data.write(to: runtime.appendingPathComponent("capture-action.json"), options: .atomic)
+                }
+            }
+            if !performanceDemo {
+                let image = NSButton(title: "Capture 4000 × 3000 PNG", target: demoAction, action: #selector(CopyDemoAction.addLargeImage))
+                image.setAccessibilityIdentifier("capture-large-image")
+                image.frame = NSRect(x: 35, y: 208, width: 230, height: 32)
+                image.bezelStyle = .rounded
+                window.contentView?.addSubview(image)
+                demoAction.captureLargeImage = {
+                    let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: 4000, pixelsHigh: 3000,
+                        bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+                        colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)!
+                    NSGraphicsContext.saveGraphicsState()
+                    NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+                    NSColor.systemTeal.setFill()
+                    NSRect(x: 0, y: 0, width: 4000, height: 3000).fill()
+                    ("4000 × 3000 capture fixture" as NSString).draw(at: NSPoint(x: 100, y: 1400),
+                        withAttributes: [.font: NSFont.boldSystemFont(ofSize: 120), .foregroundColor: NSColor.white])
+                    NSGraphicsContext.restoreGraphicsState()
+                    let png = bitmap.representation(using: .png, properties: [:])!
+                    expectedPNG = png
+                    copyBoard.clearContents()
+                    let success = copyBoard.setData(png, forType: .png)
+                    recordInput(action: "capture-large-image", representations: [(.png, png)], success: success,
+                                extra: ["pixelWidth": 4000, "pixelHeight": 3000])
+                }
+                let rich = NSButton(title: "Capture rich text", target: demoAction, action: #selector(CopyDemoAction.addRichText))
+                rich.setAccessibilityIdentifier("capture-rich-text")
+                rich.frame = NSRect(x: 60, y: 162, width: 180, height: 32)
+                rich.bezelStyle = .rounded
+                window.contentView?.addSubview(rich)
+                demoAction.captureRichText = {
+                    let item = NSPasteboardItem()
+                    let plainOK = item.setString(richText, forType: .string)
+                    let htmlOK = item.setData(richHTML, forType: .html)
+                    let rtfOK = item.setData(richRTF, forType: .rtf)
+                    copyBoard.clearContents()
+                    let written = copyBoard.writeObjects([item])
+                    recordInput(action: "capture-rich-text", representations: [(.string, Data(richText.utf8)), (.html, richHTML), (.rtf, richRTF)],
+                                success: plainOK && htmlOK && rtfOK && written,
+                                extra: ["plainText": richText, "plainTextCharacterCount": richText.count])
                 }
             }
             let timer = Timer(timeInterval: 0.2, repeats: true) { _ in
@@ -316,6 +388,22 @@ MainActor.assumeIsolated {
                                            "hasOwnCopyMarker": (copyBoard.types ?? []).contains(ClipboardWatcher.ownCopyType),
                                            "matchesFullFixtureText": copyBoard.string(forType: .string) == fullText,
                                            "pasteboardTypes": (copyBoard.types ?? []).map(\.rawValue)]
+                result["matchesFullRichFixtureText"] = copyBoard.string(forType: .string) == richText
+                result["matchesFixtureHTML"] = copyBoard.data(forType: .html) == richHTML
+                result["matchesFixtureRTF"] = copyBoard.data(forType: .rtf) == richRTF
+                if let png = copyBoard.data(forType: .png) {
+                    result["pngByteCount"] = png.count
+                    result["pngSHA256"] = ClipboardStore.digest(png)
+                    result["matchesFullFixturePNG"] = expectedPNG.map { png == $0 } ?? false
+                    if let bitmap = NSBitmapImageRep(data: png) {
+                        result["pngPixelWidth"] = bitmap.pixelsWide
+                        result["pngPixelHeight"] = bitmap.pixelsHigh
+                    }
+                }
+                result["representationDigests"] = [NSPasteboard.PasteboardType.string, .html, .rtf, .png].compactMap { type -> [String: Any]? in
+                    guard let data = copyBoard.data(forType: type) else { return nil }
+                    return ["uti": type.rawValue, "byteCount": data.count, "sha256": ClipboardStore.digest(data)]
+                }
                 for type in [NSPasteboard.PasteboardType.string, .URL, .fileURL] {
                     if let value = copyBoard.string(forType: type) { result[type.rawValue] = value }
                 }
@@ -386,5 +474,7 @@ echo "Built: $APP"
 echo "Screenshot folder: $RUNTIME/Screenshots"
 echo "Clipboard folder: $RUNTIME/Clipboard"
 echo "Performance JSON (when enabled): $RUNTIME/performance.json"
+echo "Capture inputs and sequence metadata (when enabled): $RUNTIME/Inputs"
+echo "Copy result (when enabled): $RUNTIME/copy-result.json"
 echo "Isolated shelf preferences: $SUITE"
 echo "Not launched. No Desktop access or screenshot preference changes."

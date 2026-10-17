@@ -26,8 +26,10 @@ struct ShelfContent: Codable, Equatable {
     }
 }
 
-enum ClipboardPayload {
+enum ClipboardPayload: Sendable {
     case image(Data)
+    /// Immutable representations from one clipboard change. Decode on the worker.
+    case imageRepresentations([Data], fallbackText: String?)
     case text(String)
     case link(URL)
     case files([URL])
