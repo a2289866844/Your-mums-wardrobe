@@ -22,8 +22,10 @@ struct ShelfContent: Codable, Equatable {
     }
 }
 
-enum ClipboardPayload {
+enum ClipboardPayload: Sendable {
     case image(Data)
+    /// Immutable representations from one clipboard change. Decode on the worker.
+    case imageRepresentations([Data], fallbackText: String?)
     case text(String)
     case link(URL)
     case files([URL])
@@ -40,8 +42,8 @@ struct ClipboardStore {
         for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Clipline/Clipboard", isDirectory: true)
 
-    func write(_ data: Data, kind: ShelfContentKind, extension ext: String) throws -> (URL, String) {
-        let digest = Self.digest(data)
+    func write(_ data: Data, kind: ShelfContentKind, extension ext: String, preparedDigest: String? = nil) throws -> (URL, String) {
+        let digest = preparedDigest ?? Self.digest(data)
         var url = folder.appendingPathComponent("\(kind.rawValue)-\(digest).\(ext)")
         let fm = FileManager.default
         guard folder.standardizedFileURL == folder.resolvingSymlinksInPath().standardizedFileURL

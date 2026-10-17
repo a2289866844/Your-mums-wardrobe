@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let screenshotMonitoringStartedAt = Date()
     private let line: Line
     private let defaults: UserDefaults
+    private let capturePasteboard: NSPasteboard
     /// Verification hosts can watch a dedicated fixture folder without
     /// reading Desktop or changing the user's screenshot preferences.
     private let screenshotFolder: URL?
@@ -55,9 +56,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The screen a new capture was taken on: the line goes there.
     private var pendingScreen: NSScreen?
 
-    init(line: Line? = nil, screenshotFolder: URL? = nil, defaults: UserDefaults = .standard) {
+    init(line: Line? = nil, screenshotFolder: URL? = nil, defaults: UserDefaults = .standard,
+         capturePasteboard: NSPasteboard = .general) {
         self.line = line ?? Line()
         self.defaults = defaults
+        self.capturePasteboard = capturePasteboard
         self.screenshotFolder = screenshotFolder
         super.init()
     }
@@ -138,6 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         clipboardWatcher?.stop()
+        line.cancelClipboardPreparation()
         watcher?.stop()
         safetyWatcher?.stop()
         screenshotLocationMonitor?.stop()
@@ -150,9 +154,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         defaults.set(enabled, forKey: "clipboardEnabled")
         clipboardWatcher?.stop()
         clipboardWatcher = nil
+        line.cancelClipboardPreparation()
         guard enabled else { return }
-        let watcher = ClipboardWatcher { [weak self] payload in
-            self?.line.ingestClipboard(payload) ?? false
+        let watcher = ClipboardWatcher(pasteboard: capturePasteboard) { [weak self] payload in
+            self?.line.ingestClipboardInBackground(payload) ?? false
         }
         clipboardWatcher = watcher
         watcher.start()

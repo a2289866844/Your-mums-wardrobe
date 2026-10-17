@@ -96,16 +96,28 @@ final class ClipboardWatcher {
         // If a file copy is present but malformed, do not mistake its icon
         // representation for an explicitly copied screenshot.
         if (pasteboard.types ?? []).contains(.fileURL) || items.contains(where: { $0.types.contains(.fileURL) }) { return nil }
-        for type in [NSPasteboard.PasteboardType.png, .tiff] {
+        var images: [Data] = []
+        // Board-wide types also advertise automatic conversions; item types
+        // identify what the source actually supplied.
+        let availableTypes = Set(items.isEmpty ? (pasteboard.types ?? []) : items.flatMap(\.types))
+        // Asking for an undeclared image type can make AppKit synchronously
+        // transcode a large bitmap before the worker even receives it.
+        for type in [NSPasteboard.PasteboardType.png, .tiff] where availableTypes.contains(type) {
             guard pasteboard.changeCount == expectedCount else { return nil }
             if let data = pasteboard.data(forType: type), data.count <= ClipboardStore.imageDataLimit,
-               let png = ClipboardStore.normalizedPNG(data) { return .image(png) }
+               !data.isEmpty { images.append(data) }
         }
         guard pasteboard.changeCount == expectedCount else { return nil }
-        var text = pasteboard.string(forType: .string)
+        // Do not ask the pasteboard to synthesize text/URLs from an image.
+        // Explicit text remains available as a fallback for malformed images.
+        let hasText = images.isEmpty || availableTypes.contains(.string) || availableTypes.contains(.URL)
+        var text = hasText ? pasteboard.string(forType: .string) : nil
         guard pasteboard.changeCount == expectedCount else { return nil }
-        if text == nil { text = pasteboard.string(forType: .URL) }
-        guard let text, !text.isEmpty, text.utf8.count <= ClipboardStore.textLimit else { return nil }
+        if hasText, text == nil { text = pasteboard.string(forType: .URL) }
+        guard pasteboard.changeCount == expectedCount else { return nil }
+        let boundedText = text.flatMap { !$0.isEmpty && $0.utf8.count <= ClipboardStore.textLimit ? $0 : nil }
+        if !images.isEmpty { return .imageRepresentations(images, fallbackText: boundedText) }
+        guard let text = boundedText else { return nil }
         if let url = ClipboardStore.link(in: text) { return .link(url) }
         return .text(text)
     }
