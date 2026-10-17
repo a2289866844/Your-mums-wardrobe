@@ -2,12 +2,13 @@ import AppKit
 import Combine
 import Darwin
 import os
+import ClipdCore
 
 let log = Logger(subsystem: "io.github.a2289866844.clipline", category: "line")
 
 /// One copied item or screenshot hanging on the line.
 struct Pegged: Identifiable, Equatable {
-    let id = UUID()
+    let id: UUID
     let url: URL
     var thumb: NSImage
     var content: ShelfContent
@@ -17,19 +18,22 @@ struct Pegged: Identifiable, Equatable {
     var previewText: String? { content.previewText }
     var linkURL: URL? { content.linkURL }
 
-    init(url: URL, thumb: NSImage, content: ShelfContent? = nil) {
+    init(id: UUID = UUID(), url: URL, thumb: NSImage, content: ShelfContent? = nil, thumbnailPrepared: Bool = true) {
+        self.id = id
         self.url = url
         self.thumb = thumb
         self.content = content ?? .image(url)
+        self.thumbnailPrepared = thumbnailPrepared
     }
     /// Every photo hangs a little crooked, like on a real line.
     let tilt = Double.random(in: -2.5...2.5)
     var falling = false
     /// Still flying in from where it was captured; the card waits hidden.
     var flying = false
+    var thumbnailPrepared = true
 
     static func == (a: Pegged, b: Pegged) -> Bool {
-        a.id == b.id && a.falling == b.falling && a.flying == b.flying && a.thumb === b.thumb && a.content == b.content
+        a.id == b.id && a.falling == b.falling && a.flying == b.flying && a.thumb === b.thumb && a.content == b.content && a.thumbnailPrepared == b.thumbnailPrepared
     }
 }
 
@@ -52,14 +56,252 @@ final class Line: ObservableObject {
 
     /// Card frames in window coordinates, reported by the views. The panel
     /// uses them to only catch clicks over photos and let the rest through.
-    var hitRects: [UUID: CGRect] = [:]
+    var hitRects: [UUID: CGRect] = [:] {
+        didSet { if revealed && hitRects != oldValue { onInteractionChange?() } }
+    }
 
     var maxItems = 8 {
         didSet { enforceCapacity() }
     }
-    /// The system editor can outlive a card interaction. Its file stays alive until dismissal.
+    /// Storage capacity is independent of the number of cards on screen.
+    static let historyLimit = 120
+    @Published var pageSize = 6 { didSet { pageWindowCount = nil } }
+    private var pageWindowCount: Int?
+    @Published private(set) var pageEndID: UUID?
+    @Published private(set) var pageRevision = 0
+    private(set) var pagingOlder = true
+    var onNavigate: (() -> Void)?
+    var onInteractionChange: (() -> Void)?
+    var onSearchEnd: (() -> Void)?
+    @Published var library: ClipdLibrary?
+    @Published var libraryQuery = "" { didSet { if oldValue != libraryQuery { library?.refreshResults() } } }
+    @Published var libraryScope: LibraryScope = .recent { didSet { if oldValue != libraryScope { library?.refreshResults() } } }
+    @Published var libraryStatus = ""
+    var capturedTextFormats: [CapturedTextFormat] = []
+    private var pendingText: [UUID: String] = [:]
+    private var applyingCaptureContext: ClipboardCaptureContext?
+    @Published var searchFocused = false
+    @Published private(set) var libraryResults: [Pegged] = []
+    var archivingIDs = Set<UUID>() { didSet { interactionChanged() } }
+    var showingLibraryResults: Bool { library != nil && (!libraryQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || libraryScope != .recent) }
+    private var editingItem: Pegged?
+    private var actionItems: [Pegged] { items + libraryResults + (editingItem.map { [$0] } ?? []) }
+    func item(_ id: UUID) -> Pegged? { actionItems.first { $0.id == id && !$0.falling } }
+
+    func setLibraryResults(_ results: [Pegged]) {
+        let end = showingLibraryResults ? results.prefix(max(1, pageSize)).last?.id : nil
+        guard libraryResults != results || pageEndID != end || pageWindowCount != nil else { return }
+        libraryResults = results
+        pageWindowCount = nil
+        pageEndID = end
+        pageRevision += 1
+        library?.prepareVisibleThumbnails()
+    }
+
+    /// Each closed shelf ends its search session; the next capture must be visible.
+    func resetLibraryView() {
+        guard !libraryQuery.isEmpty || libraryScope != .recent || !libraryStatus.isEmpty ||
+                pageWindowCount != nil || pageEndID != nil || !libraryResults.isEmpty else { return }
+        if !libraryQuery.isEmpty { libraryQuery = "" }
+        if libraryScope != .recent { libraryScope = .recent }
+        if !libraryStatus.isEmpty { libraryStatus = "" }
+        pageWindowCount = nil
+        if pageEndID != nil { pageEndID = nil }
+        if !libraryResults.isEmpty { libraryResults = [] }
+        pageRevision += 1
+        hitRects = [:]
+        library?.prepareVisibleThumbnails()
+    }
+
+    func mergeArchivedCards(_ archived: [Pegged]) {
+        let old = items.filter { !$0.falling }
+        var reused = Set<UUID>()
+        let mapped = archived.map { card in
+            guard let existing = old.first(where: { !reused.contains($0.id) &&
+                ((card.content.historyID != nil && $0.content.historyID == card.content.historyID) ||
+                 ($0.content.historyID == nil && $0.url == card.url)) }) else { return card }
+            reused.insert(existing.id)
+            // A live capture can finish archiving while the startup snapshot
+            // loads. Its URL, edits and flight state are newer than that snapshot.
+            var current = existing
+            if current.content.historyID == nil { current.content = card.content }
+            return current
+        }
+        let mappedIDs = Set(mapped.map(\.id))
+        let mappedURLs = Set(mapped.map(\.url))
+        items = mapped + old.filter { !mappedIDs.contains($0.id) && !mappedURLs.contains($0.url) }
+        enforceCapacity()
+        save()
+        library?.prepareVisibleThumbnails()
+    }
+
+    func linkArchive(_ record: ClipItem, cardID: UUID) {
+        guard let index = items.firstIndex(where: { $0.id == cardID && !$0.falling }) else { return }
+        let oldURL = items[index].url
+        var record = record
+        if let pending = pendingText[cardID], record.kind == .text, pending != ClipdLibrary.fullText(record) {
+            do {
+                try library?.editText(record.id, text: pending)
+                if let updated = try library?.store.item(id: record.id) { record = updated }
+            } catch { libraryStatus = "編輯尚未寫入歷史，請保留這張卡片"; return }
+        }
+        if record.kind == .text || record.kind == .link,
+           let archived = try? library?.card(for: record) {
+            items[index] = Pegged(id: cardID, url: archived.url, thumb: archived.thumb, content: archived.content)
+        } else {
+            items[index].content.historyID = record.id
+            items[index].content.sourceAppName = record.sourceAppName
+            items[index].content.isPinned = record.isPinned
+            if record.kind == .image { items[index].content.ocrText = record.searchText }
+        }
+        pendingText[cardID] = nil
+        let archiveURL = items[index].url
+        // Both apps may have captured the same copy before unification.
+        items.removeAll { $0.id != cardID && $0.content.historyID == record.id && !isProtected($0) }
+        save()
+        if oldURL != archiveURL { scheduleReleasedClipboardCleanup(oldURL) }
+    }
+
+    func updateOCR(_ record: ClipItem) {
+        for index in items.indices where items[index].content.historyID == record.id { items[index].content.ocrText = record.searchText }
+        for index in libraryResults.indices where libraryResults[index].content.historyID == record.id { libraryResults[index].content.ocrText = record.searchText }
+        if showingLibraryResults { library?.refreshResults() }
+    }
+
+    func setPinned(_ pinned: Bool, historyID: String) {
+        for i in items.indices where items[i].content.historyID == historyID { items[i].content.isPinned = pinned }
+        for i in libraryResults.indices where libraryResults[i].content.historyID == historyID { libraryResults[i].content.isPinned = pinned }
+        save()
+    }
+
+    func copyArchived(_ id: String) throws -> Bool {
+        guard let library else { return false }
+        let success = try library.writeCopy(id, to: copyPasteboard)
+        if success, let card = actionItems.first(where: { $0.content.historyID == id }) { copyFeedback(card.id, success: true) }
+        return success
+    }
+
+    func copyPlainText(_ id: UUID) {
+        guard let card = item(id), let historyID = card.content.historyID, let library else { return }
+        do { copyFeedback(id, success: try library.writeCopy(historyID, to: copyPasteboard, plainText: true)) }
+        catch { copyFeedback(id, success: false) }
+    }
+
+    func textForCard(_ id: UUID) -> String? {
+        if let text = pendingText[id] { return text }
+        guard let card = item(id) else { return nil }
+        if let historyID = card.content.historyID, let library,
+           let record = try? library.record(historyID) { return ClipdLibrary.fullText(record) }
+        return ClipboardStore.text(at: card.url)
+    }
+
+    private var liveItems: [Pegged] { (showingLibraryResults ? libraryResults : items).filter { !$0.falling } }
+    private var pageEnd: Int {
+        let live = liveItems
+        guard let pageEndID, let index = live.firstIndex(where: { $0.id == pageEndID }) else { return live.count }
+        return index + 1
+    }
+    var visibleItems: [Pegged] {
+        let live = liveItems
+        let end = pageEnd
+        return Array(live[max(0, end - max(1, pageWindowCount ?? pageSize))..<end])
+    }
+    func thumbnailPreparationWindow(limit: Int) -> [Pegged] {
+        let live = liveItems
+        guard limit > 0, !live.isEmpty else { return [] }
+        let visibleStart = max(0, pageEnd - max(1, pageWindowCount ?? pageSize))
+        let start = max(0, min(visibleStart - pageSize, live.count - limit))
+        return Array(live[start..<min(live.count, start + limit)])
+    }
+
+    static func thumbnailPlaceholder(for kind: ShelfContentKind) -> NSImage {
+        NSImage(systemSymbolName: kind == .image ? "photo" : "doc", accessibilityDescription: nil)!
+    }
+
+    func retainPreparedThumbnails(_ retained: Set<UUID>) {
+        func demote(_ values: [Pegged]) -> [Pegged] {
+            values.map { item in
+                guard item.thumbnailPrepared, !retained.contains(item.id), item.kind == .image || item.kind == .file else { return item }
+                var item = item
+                item.thumb = Self.thumbnailPlaceholder(for: item.kind)
+                item.thumbnailPrepared = false
+                return item
+            }
+        }
+        let updated = demote(items), results = demote(libraryResults)
+        if updated != items { items = updated }
+        if results != libraryResults { libraryResults = results }
+    }
+
+    func applyPreparedThumbnails(_ images: [UUID: CGImage]) {
+        func hydrate(_ values: [Pegged]) -> [Pegged] {
+            values.map { item in
+                guard let image = images[item.id] else { return item }
+                if item.thumbnailPrepared, item.thumb.cgImage(forProposedRect: nil, context: nil, hints: nil) === image { return item }
+                var item = item
+                item.thumb = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+                item.thumbnailPrepared = true
+                return item
+            }
+        }
+        let updated = hydrate(items), results = hydrate(libraryResults)
+        if updated != items { items = updated }
+        if results != libraryResults { libraryResults = results }
+    }
+
+    func applyPreparedFileIcons(_ icons: [UUID: NSImage]) {
+        func hydrate(_ values: [Pegged]) -> [Pegged] {
+            values.map { card in
+                guard let icon = icons[card.id] else { return card }
+                var card = card
+                card.thumb = icon
+                card.thumbnailPrepared = true
+                return card
+            }
+        }
+        let updated = hydrate(items), results = hydrate(libraryResults)
+        if updated != items { items = updated }
+        if results != libraryResults { libraryResults = results }
+    }
+
+    var hasOlderPage: Bool { pageEnd > max(1, pageSize) }
+    var hasNewerPage: Bool { pageEnd < liveItems.count }
+    var canNavigate: Bool { draggingID == nil && pressedID == nil && editingURL == nil }
+
+    func showOlderPage() {
+        guard hasOlderPage, canNavigate else { return }
+        let live = liveItems
+        let end = max(1, pageEnd - max(1, pageWindowCount ?? pageSize))
+        pagingOlder = true
+        pageWindowCount = nil
+        pageEndID = live[end - 1].id
+        pageRevision += 1
+        hitRects = [:]
+        library?.prepareVisibleThumbnails()
+        onNavigate?()
+    }
+
+    func showNewerPage() {
+        guard hasNewerPage, canNavigate else { return }
+        let live = liveItems
+        let start = pageEnd
+        let end = min(live.count, start + max(1, pageSize))
+        pagingOlder = false
+        pageWindowCount = end - start
+        pageEndID = end == live.count ? nil : live[end - 1].id
+        pageRevision += 1
+        hitRects = [:]
+        library?.prepareVisibleThumbnails()
+        onNavigate?()
+    }
+    /// The text editor can outlive a card interaction. Its contents stay alive until dismissal.
     var editingURL: URL? {
-        didSet { if oldValue != editingURL { interactionChanged() } }
+        didSet {
+            if oldValue != editingURL {
+                editingItem = editingURL.flatMap { url in actionItems.first { $0.url.standardizedFileURL == url.standardizedFileURL } }
+                interactionChanged()
+            }
+        }
     }
     /// Called for each new capture, even when the line is already at capacity.
     var onCapture: (() -> Void)?
@@ -73,6 +315,8 @@ final class Line: ObservableObject {
     private struct PendingClipboard {
         let id = UUID()
         let payload: ClipboardPayload
+        let textFormats: [CapturedTextFormat]
+        let context: ClipboardCaptureContext
         var retries = 2
     }
     private var pendingClipboard: [PendingClipboard] = []
@@ -124,28 +368,38 @@ final class Line: ObservableObject {
     func hang(_ url: URL, quietly: Bool = false, flying: Bool = false) -> UUID? {
         guard !items.contains(where: { $0.url == url && !$0.falling }),
               let thumb = makeThumbnail(url) else { return nil }
-        var item = Pegged(url: url, thumb: thumb)
+        return hang(url, thumbnail: thumb, quietly: quietly, flying: flying)
+    }
+
+    @discardableResult
+    func hang(_ url: URL, thumbnail: NSImage, quietly: Bool = false, flying: Bool = false) -> UUID? {
+        guard !items.contains(where: { $0.url == url && !$0.falling }) else { return nil }
+        var item = Pegged(url: url, thumb: thumbnail)
         item.flying = flying
         append(item, quietly: quietly)
         return item.id
     }
 
     private func append(_ item: Pegged, quietly: Bool = false) {
+        if pageEndID == nil && !showingLibraryResults { pageWindowCount = nil }
         items.append(item)
+        library?.archive(item, textFormats: item.kind == .text || item.kind == .link ? capturedTextFormats : [],
+                         fullText: pendingText[item.id], captureContext: applyingCaptureContext)
         enforceCapacity()
         save()
         if !quietly {
             onCapture?()
             play("Tink", volume: 0.35)
         }
+        library?.prepareVisibleThumbnails()
     }
 
     private func isProtected(_ item: Pegged) -> Bool {
-        item.id == draggingID || item.id == pressedID || item.url.standardizedFileURL == editingURL?.standardizedFileURL
+        archivingIDs.contains(item.id) || item.id == draggingID || item.id == pressedID || item.url.standardizedFileURL == editingURL?.standardizedFileURL
     }
 
     private func isProtectedURL(_ url: URL) -> Bool {
-        items.contains { isProtected($0) && $0.url.standardizedFileURL == url.standardizedFileURL }
+        actionItems.contains { isProtected($0) && $0.url.standardizedFileURL == url.standardizedFileURL }
     }
 
     private func enforceCapacity() {
@@ -160,6 +414,7 @@ final class Line: ObservableObject {
     }
 
     private func interactionChanged() {
+        onInteractionChange?()
         enforceCapacity()
         // Invalidate pending cleanup while a URL is in use. Once released,
         // give consumers another full animation interval to read a dragged file.
@@ -179,10 +434,11 @@ final class Line: ObservableObject {
                   !self.isProtectedURL(removed.url) else { return }
             self.dropCompletionTokens[id] = nil
             self.items.removeAll { $0.id == id }
+            self.pendingText[id] = nil
             if removed.content.originalFileReference != true,
                !self.originalClipboardFiles.contains(removed.url.standardizedFileURL),
                self.clipboardFileLease?.url != removed.url.standardizedFileURL,
-               !self.items.contains(where: { $0.url.standardizedFileURL == removed.url.standardizedFileURL }) {
+               !self.actionItems.contains(where: { $0.url.standardizedFileURL == removed.url.standardizedFileURL }) {
                 self.clipboardStore.remove(removed.url)
             }
         }
@@ -199,9 +455,18 @@ final class Line: ObservableObject {
     var onFall: ((Pegged) -> Void)?
 
     func drop(_ id: UUID, quietly: Bool = false) {
+        if !items.contains(where: { $0.id == id }), let item = libraryResults.first(where: { $0.id == id }) {
+            onFall?(item)
+            libraryResults.removeAll { $0.id == id }
+            hitRects[id] = nil
+            return
+        }
         guard let i = items.firstIndex(where: { $0.id == id }), !items[i].falling else { return }
         onFall?(items[i])
         items[i].falling = true
+        if pageEndID == id {
+            pageEndID = items[..<i].last(where: { !$0.falling })?.id
+        }
         hitRects[id] = nil
         save()
         if !quietly { play("Pop", volume: 0.25) }
@@ -219,7 +484,10 @@ final class Line: ObservableObject {
 
     /// Photos whose file was deleted or moved away fall off by themselves.
     func prune() {
-        for item in items where !item.falling && !FileManager.default.fileExists(atPath: item.url.path) {
+        for item in items where !item.falling {
+            if item.content.historyID != nil && (item.kind == .text || item.kind == .link) { continue }
+            if pendingText[item.id] != nil { continue }
+            guard !FileManager.default.fileExists(atPath: item.url.path) else { continue }
             drop(item.id, quietly: true)
         }
     }
@@ -234,12 +502,32 @@ final class Line: ObservableObject {
         case .text(let text):
             guard !text.isEmpty, text.utf8.count <= ClipboardStore.textLimit else { return false }
             if let link = ClipboardStore.link(in: text) { return ingestClipboard(.link(link)) }
+            if library != nil {
+                let digest = ClipboardStore.digest(Data(text.utf8))
+                if items.contains(where: { !$0.falling && $0.kind == .text && $0.content.digest == digest }) { return true }
+                let id = UUID()
+                let title = String((text.split(whereSeparator: \.isNewline).first.map(String.init) ?? "Text").prefix(80))
+                let content = ShelfContent(kind: .text, title: title, subtitle: "Text", previewText: String(text.prefix(800)), digest: digest)
+                pendingText[id] = text
+                append(Pegged(id: id, url: URL(fileURLWithPath: "/clipline-pending/\(id).txt"),
+                              thumb: NSImage(systemSymbolName: "doc.text", accessibilityDescription: nil)!, content: content))
+                return true
+            }
             return addManaged(Data(text.utf8), kind: .text, extension: "txt") { _, digest in
                 let firstLine = text.split(whereSeparator: \.isNewline).first.map(String.init) ?? "Copied text"
                 return ShelfContent(kind: .text, title: String(firstLine.prefix(80)), subtitle: "Text",
                                     previewText: String(text.prefix(800)), digest: digest)
             }
         case .link(let url):
+            if library != nil, let valid = ClipboardStore.link(in: url.absoluteString), valid.absoluteString.utf8.count <= ClipboardStore.textLimit {
+                if items.contains(where: { !$0.falling && $0.linkURL == valid }) { return true }
+                let id = UUID()
+                pendingText[id] = valid.absoluteString
+                let content = ShelfContent(kind: .link, title: valid.host ?? valid.absoluteString, subtitle: "Link", previewText: valid.absoluteString, linkURL: valid)
+                append(Pegged(id: id, url: URL(fileURLWithPath: "/clipline-pending/\(id).webloc"),
+                              thumb: NSImage(systemSymbolName: "link", accessibilityDescription: nil)!, content: content))
+                return true
+            }
             guard let valid = ClipboardStore.link(in: url.absoluteString),
                   valid.absoluteString.utf8.count <= ClipboardStore.textLimit,
                   let data = try? PropertyListSerialization.data(fromPropertyList: ["URL": valid.absoluteString], format: .xml, options: 0)
@@ -277,7 +565,8 @@ final class Line: ObservableObject {
     /// Production clipboard capture returns immediately; only immutable results
     /// come back to the main actor. All payloads share the queue to retain order.
     @discardableResult
-    func ingestClipboardInBackground(_ payload: ClipboardPayload) -> Bool {
+    func ingestClipboardInBackground(_ payload: ClipboardPayload, captureContext: ClipboardCaptureContext? = nil) -> Bool {
+        let context = captureContext ?? .current()
         // Finder references become originals before yielding, even when the
         // prior card is already falling and its cleanup deadline is near.
         if case .files(let urls) = payload {
@@ -293,7 +582,7 @@ final class Line: ObservableObject {
             }
             if upgraded { save() }
         }
-        pendingClipboard.append(PendingClipboard(payload: payload))
+        pendingClipboard.append(PendingClipboard(payload: payload, textFormats: capturedTextFormats, context: context))
         prepareNextClipboard()
         return true
     }
@@ -313,7 +602,7 @@ final class Line: ObservableObject {
             self.prune()
             guard self.clipboardPreparationGeneration == generation,
                   self.pendingClipboard.first?.id == request.id else { return }
-            let accepted = self.applyPreparedClipboard(result, generation: generation)
+            let accepted = self.applyPreparedClipboard(result, generation: generation, textFormats: request.textFormats, captureContext: request.context)
             // onCapture can pause capture or enqueue another payload synchronously.
             guard self.clipboardPreparationGeneration == generation,
                   self.pendingClipboard.first?.id == request.id else { return }
@@ -345,8 +634,18 @@ final class Line: ObservableObject {
         items.contains { !$0.falling && $0.kind == .image && clipboardPreparation.cachedDigest($0.url) == digest }
     }
 
-    private func applyPreparedClipboard(_ result: ClipboardPreparation.Result?, generation: Int? = nil) -> Bool {
+    private func applyPreparedClipboard(_ result: ClipboardPreparation.Result?, generation: Int? = nil,
+                                        textFormats: [CapturedTextFormat]? = nil,
+                                        captureContext: ClipboardCaptureContext? = nil) -> Bool {
         guard let result else { return false }
+        // Watcher callbacks reset their formats immediately after enqueueing.
+        // Restore this capture's immutable snapshot only while archiving it.
+        let previousContext = applyingCaptureContext
+        applyingCaptureContext = captureContext ?? previousContext
+        defer { applyingCaptureContext = previousContext }
+        let previousFormats = capturedTextFormats
+        if let textFormats { capturedTextFormats = textFormats }
+        defer { capturedTextFormats = previousFormats }
         switch result {
         case .passthrough(let payload): return ingestClipboard(payload)
         case .duplicate(let digest): return hasImage(with: digest)
@@ -401,12 +700,17 @@ final class Line: ObservableObject {
     // MARK: Actions on one photo
 
     func copy(_ id: UUID, to pasteboard: NSPasteboard? = nil) {
-        guard let item = items.first(where: { $0.id == id }) else { return }
+        guard let item = item(id) else { return }
         let pasteboard = pasteboard ?? copyPasteboard
+        if let historyID = item.content.historyID, let library {
+            do { copyFeedback(id, success: try library.writeCopy(historyID, to: pasteboard)) }
+            catch { copyFeedback(id, success: false) }
+            return
+        }
         let entry = NSPasteboardItem()
         switch item.kind {
         case .text:
-            guard let text = ClipboardStore.text(at: item.url) else { copyFeedback(id, success: false); return }
+            guard let text = textForCard(id) else { copyFeedback(id, success: false); return }
             entry.setString(text, forType: .string)
         case .link:
             guard let url = item.linkURL else { copyFeedback(id, success: false); return }
@@ -449,16 +753,36 @@ final class Line: ObservableObject {
     }
 
     func open(_ id: UUID) {
-        guard let item = items.first(where: { $0.id == id }) else { return }
-        if item.kind == .image { PreviewWindowCenterer.shared.open(item.url) }
+        guard let item = item(id) else { return }
+        if item.kind == .text { TextCardEditor.shared.open(item, line: self) }
         else { NSWorkspace.shared.open(item.linkURL ?? item.url) }
+    }
+
+    /// Keep the card identity and full backing text when saving an edit.
+    func updateText(_ id: UUID, text: String) throws {
+        guard var item = item(id), item.kind == .text,
+              text.utf8.count <= ClipboardStore.textLimit else { throw CocoaError(.fileWriteInvalidFileName) }
+        let data = Data(text.utf8)
+        if let historyID = item.content.historyID, let library { try library.editText(historyID, text: text) }
+        else if pendingText[id] != nil { pendingText[id] = text }
+        else {
+            guard clipboardStore.owns(item.url) else { throw CocoaError(.fileWriteNoPermission) }
+            try data.write(to: item.url, options: .atomic)
+        }
+        item.content.title = String((text.split(whereSeparator: \.isNewline).first.map(String.init) ?? "Text").prefix(80))
+        item.content.previewText = String(text.prefix(800))
+        item.content.digest = ClipboardStore.digest(data)
+        for i in items.indices where items[i].id == id { items[i].content = item.content }
+        for i in libraryResults.indices where libraryResults[i].id == id { libraryResults[i].content = item.content }
+        if editingItem?.id == id { editingItem?.content = item.content }
+        save()
     }
 
     /// Moves the file to the Trash and takes the photo off the line. When a
     /// drag ends on the Dock's Trash, macOS only reports it: deleting the file
     /// is the source app's job, as Finder does.
     func trash(_ id: UUID) {
-        guard let item = items.first(where: { $0.id == id }) else { return }
+        guard let item = item(id) else { return }
         do {
             try FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
             log.notice("Trashed \(item.url.lastPathComponent, privacy: .private)")
@@ -478,7 +802,7 @@ final class Line: ObservableObject {
     /// to the Trash, or the folder would fill up with forgotten screenshots.
     /// Files anywhere else, like the Desktop, stay where they are.
     func isInInbox(_ id: UUID) -> Bool {
-        guard let item = items.first(where: { $0.id == id }), item.content.originalFileReference != true else { return false }
+        guard let item = item(id), item.content.originalFileReference != true else { return false }
         return item.url.standardizedFileURL.path.hasPrefix(Inbox.folder.standardizedFileURL.path + "/")
     }
 
@@ -489,7 +813,7 @@ final class Line: ObservableObject {
 
     /// Inbox mode: keep a screenshot by moving it to the Desktop.
     func saveToDesktop(_ id: UUID) {
-        guard let item = items.first(where: { $0.id == id }) else { return }
+        guard let item = item(id) else { return }
         let desktop = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Desktop")
         let target = uniqueURL(in: desktop, for: item.url.lastPathComponent)
         do {
@@ -513,31 +837,12 @@ final class Line: ObservableObject {
         return candidate
     }
 
-    /// Long press: open the photo in the system Markup editor.
-    func markup(_ id: UUID) {
-        guard let item = items.first(where: { $0.id == id }), item.kind == .image else { return }
-        Markup.shared.edit(item.url)
-    }
-
-    /// After editing, the photo on the line shows the new version.
-    func reloadThumbnail(for url: URL) {
-        guard let id = items.first(where: { $0.url == url && !$0.falling })?.id else { return }
-        clipboardPreparation.prepare(.files([url]), candidates: []) { [weak self] result in
-            guard let self, case .files(let files) = result, let file = files.first,
-                  let thumbnail = file.thumbnail,
-                  ClipboardPreparation.FileVersion.read(url) == file.version,
-                  let index = self.items.firstIndex(where: { $0.id == id && $0.url == url && !$0.falling }) else { return }
-            self.items[index].thumb = NSImage(cgImage: thumbnail,
-                size: NSSize(width: thumbnail.width, height: thumbnail.height))
-            if self.clipboardStore.owns(url) {
-                self.items[index].content.digest = file.digest
-                self.save()
-            }
-        }
-    }
-
     func reveal(_ id: UUID) {
-        guard let item = items.first(where: { $0.id == id }) else { return }
+        guard let item = item(id) else { return }
+        if item.content.historyID != nil && (item.kind == .text || item.kind == .link), let library {
+            NSWorkspace.shared.open(library.directory)
+            return
+        }
         NSWorkspace.shared.activateFileViewerSelecting([item.url])
     }
 
@@ -548,7 +853,7 @@ final class Line: ObservableObject {
     private func scheduleGust() {
         DispatchQueue.main.asyncAfter(deadline: .now() + .random(in: 7...16)) { [weak self] in
             guard let self else { return }
-            if !self.items.isEmpty && self.draggingID == nil { self.gust += 1 }
+            if self.revealed && !self.items.isEmpty && self.draggingID == nil { self.gust += 1 }
             self.scheduleGust()
         }
     }
@@ -609,6 +914,7 @@ final class Line: ObservableObject {
     private func scheduleReleasedClipboardCleanup(_ url: URL) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self, self.clipboardFileLease?.url != url,
+                  !self.isProtectedURL(url),
                   !self.originalClipboardFiles.contains(url),
                   !self.items.contains(where: { $0.url.standardizedFileURL == url }) else { return }
             self.clipboardStore.remove(url)
@@ -630,9 +936,10 @@ final class Line: ObservableObject {
     }
 
     private func save() {
-        let paths = items.filter { !$0.falling }.map(\.url.path)
+        let local = items.filter { !$0.falling && $0.content.historyID == nil && pendingText[$0.id] == nil }
+        let paths = local.map(\.url.path)
         defaults.set(paths, forKey: storeKey)
-        let metadata = items.filter { !$0.falling }.reduce(into: [String: Data]()) { result, item in
+        let metadata = local.reduce(into: [String: Data]()) { result, item in
             result[item.url.path] = try? JSONEncoder().encode(item.content)
         }
         defaults.set(metadata, forKey: "peggedContent")

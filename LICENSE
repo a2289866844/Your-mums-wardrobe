@@ -1,6 +1,7 @@
 MIT License
 
 Copyright (c) 2026 Alejandro Buján
+Copyright (c) 2026 a2289866844 (wardrobe modifications and contributed ClipdCore)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -25,12 +26,15 @@ SOFTWARE.
 Name and icon
 
 The MIT License above covers the source code. It does not grant any rights
-to the Tendedero name or the Tendedero icon, including the original icon
-artwork retained in the docs folder.
-The wardrobe icon drawn by scripts/make-icon.swift and stored in
-docs/clipline-icon.png is provided under the MIT License above.
+to the Tendedero name or the Tendedero icon, including the icon artwork drawn
+by scripts/make-icon.swift and the images in the docs folder.
 
 You may build and use the app as published, and you may refer to Tendedero
 to say where your work comes from. Modified or redistributed versions must
 use a different name and a different icon, and must not suggest that they
 are Tendedero or are endorsed by its author.
+
+Clarification for this independent modified version: the name and icon
+restrictions above refer to original Tendedero assets. The replacement wardrobe
+icon drawn by the current scripts/make-icon.swift and docs/clipline-icon.png
+is provided under the source-code MIT terms above, as stated in NOTICE.md.

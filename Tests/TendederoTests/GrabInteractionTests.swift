@@ -4,22 +4,19 @@ import XCTest
 
 @MainActor
 final class GrabInteractionTests: XCTestCase {
-    func testCopyButtonOwnsItsHitRegionAndDoesNotOpenOrMarkup() {
+    func testCopyButtonOwnsItsHitRegionAndDoesNotOpen() {
         _ = NSApplication.shared
         let view = GrabView(frame: NSRect(x: 0, y: 0, width: 220, height: 182))
         view.layout()
         var copied = 0
         var opened = 0
-        var markedUp = 0
         view.onCopy = { copied += 1 }
         view.onClick = { opened += 1 }
-        view.onLongPress = { markedUp += 1 }
         XCTAssertTrue(view.hitTest(NSPoint(x: view.copyButton.frame.midX, y: view.copyButton.frame.midY)) === view.copyButton)
         XCTAssertTrue(view.hitTest(NSPoint(x: 100, y: 100)) === view)
         view.copyButton.performClick(nil)
         XCTAssertEqual(copied, 1)
         XCTAssertEqual(opened, 0)
-        XCTAssertEqual(markedUp, 0)
         XCTAssertTrue(view.copyButton.acceptsFirstMouse(for: nil))
     }
 
@@ -127,32 +124,21 @@ final class GrabInteractionTests: XCTestCase {
         }
     }
 
-    func testLongHoldOnTextOrLinkRemainsOrdinaryClick() {
-        for kind in [ShelfContentKind.text, .link, .file] {
+    func testHoldingAnyCardKeepsPressProtectionAndOpensOnlyOnRelease() {
+        for kind in [ShelfContentKind.image, .text, .link, .file] {
             let view = view(kind)
-            var markedUp = 0
             var opened = 0
-            view.onLongPress = { markedUp += 1 }
+            var pressed = false
             view.onClick = { opened += 1 }
+            view.onPressChange = { pressed = $0 }
             view.mouseDown(with: event(.leftMouseDown))
-            RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+            RunLoop.main.run(until: Date().addingTimeInterval(0.55))
+            XCTAssertEqual(opened, 0)
+            XCTAssertTrue(pressed)
             view.mouseUp(with: event(.leftMouseUp))
-            XCTAssertEqual(markedUp, 0)
             XCTAssertEqual(opened, 1)
+            XCTAssertFalse(pressed)
         }
-    }
-
-    func testImageHoldOpensMarkupAndSuppressesClick() {
-        let view = view()
-        var markedUp = 0
-        var opened = 0
-        view.onLongPress = { markedUp += 1 }
-        view.onClick = { opened += 1 }
-        view.mouseDown(with: event(.leftMouseDown))
-        RunLoop.main.run(until: Date().addingTimeInterval(0.55))
-        view.mouseUp(with: event(.leftMouseUp))
-        XCTAssertEqual(markedUp, 1)
-        XCTAssertEqual(opened, 0)
     }
 
     func testAccessibilityPressOpens() {
@@ -172,12 +158,10 @@ final class GrabInteractionTests: XCTestCase {
         XCTAssertEqual(opened, 0)
     }
 
-    func testFailedDragCancelsMarkupAndClick() {
+    func testFailedDragCancelsClickAndPress() {
         let view = view()
-        var markedUp = 0
         var opened = 0
         var pressed = false
-        view.onLongPress = { markedUp += 1 }
         view.onClick = { opened += 1 }
         view.onPressChange = { pressed = $0 }
         view.mouseDown(with: event(.leftMouseDown))
@@ -185,16 +169,13 @@ final class GrabInteractionTests: XCTestCase {
         XCTAssertFalse(pressed)
         RunLoop.main.run(until: Date().addingTimeInterval(0.55))
         view.mouseUp(with: event(.leftMouseUp))
-        XCTAssertEqual(markedUp, 0)
         XCTAssertEqual(opened, 0)
     }
 
-    func testDetachingViewCancelsPendingHoldAndPress() {
+    func testDetachingViewCancelsPendingClickAndPress() {
         let view = view()
-        var markedUp = 0
         var opened = 0
         var pressed = false
-        view.onLongPress = { markedUp += 1 }
         view.onClick = { opened += 1 }
         view.onPressChange = { pressed = $0 }
         view.mouseDown(with: event(.leftMouseDown))
@@ -203,21 +184,7 @@ final class GrabInteractionTests: XCTestCase {
         XCTAssertFalse(pressed)
         RunLoop.main.run(until: Date().addingTimeInterval(0.55))
         view.mouseUp(with: event(.leftMouseUp))
-        XCTAssertEqual(markedUp, 0)
         XCTAssertEqual(opened, 0)
-    }
-
-    func testLongPressInvokesMarkupBeforeReleasingProtection() {
-        let view = view()
-        var pressed = false
-        var markedUp = false
-        view.onPressChange = { pressed = $0 }
-        view.onLongPress = { XCTAssertTrue(pressed); markedUp = true }
-        view.mouseDown(with: event(.leftMouseDown))
-        RunLoop.main.run(until: Date().addingTimeInterval(0.55))
-        XCTAssertTrue(markedUp)
-        XCTAssertFalse(pressed)
-        view.mouseUp(with: event(.leftMouseUp))
     }
 
     func testDelayedMoveCheckDoesNotCompleteNewerDrag() {

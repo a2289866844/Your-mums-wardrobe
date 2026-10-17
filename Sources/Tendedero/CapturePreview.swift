@@ -4,6 +4,7 @@ import Foundation
 /// pointer-away grace period used by deliberate manual reveals.
 struct CapturePreview {
     private var deadline: Date?
+    var nextDeadline: Date? { deadline }
 
     mutating func start(at now: Date) { deadline = now.addingTimeInterval(3) }
     mutating func cancel() { deadline = nil }

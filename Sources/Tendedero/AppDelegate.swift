@@ -17,19 +17,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var panel: LinePanel!
     private var statusItem: NSStatusItem!
     private var watcher: ScreenshotWatcher!
-    /// In inbox mode, a second watcher on the Desktop. If a macOS version
-    /// ignores the screenshot settings (macOS 27 renamed one), captures keep
-    /// landing on the Desktop, and they still hang on the line.
-    private var safetyWatcher: ScreenshotWatcher?
+    private let screenshotThumbnails = ScreenshotThumbnailLoader()
     private var clipboardWatcher: ClipboardWatcher?
     private var screenshotLocationMonitor: ScreenshotLocationMonitor?
     private var clipboardEnabled: Bool {
         defaults.object(forKey: "clipboardEnabled") as? Bool ?? true
     }
-    private var signalSources: [DispatchSourceSignal] = []
     private var hotKey: HotKey?
+    private var searchHotKey: HotKey?
+    private var library: ClipdLibrary?
+    private var libraryStartupTask: Task<Void, Never>?
+    private var previousSearchApp: NSRunningApplication?
     private var cancellables = Set<AnyCancellable>()
-    private var mouseTimer: Timer?
+    private var pointerMonitors: [Any] = []
+    private var pointerUpdate: DispatchWorkItem?
+    private var deadlineTimer: Timer?
+    private var scheduledDeadline: Date?
+    private var settledWorkspaceUpdate: DispatchWorkItem?
+    private var isTerminating = false
 
     /// Whether the panel is ordered in. It can be in and still tucked away
     /// above the top edge, like an auto-hiding Dock.
@@ -56,42 +61,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The screen a new capture was taken on: the line goes there.
     private var pendingScreen: NSScreen?
 
-    init(line: Line? = nil, screenshotFolder: URL? = nil, defaults: UserDefaults = .standard,
+    init(line: Line? = nil, screenshotFolder: URL? = nil, defaults: UserDefaults = .standard, library: ClipdLibrary? = nil,
          capturePasteboard: NSPasteboard = .general) {
         self.line = line ?? Line()
         self.defaults = defaults
         self.capturePasteboard = capturePasteboard
         self.screenshotFolder = screenshotFolder
+        self.library = library
         super.init()
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        PreviewWindowCenterer.shared.promptsForAccess = screenshotFolder == nil
+        installEditingMenu()
         let host = NSHostingView(rootView: LineView(line: line))
         host.sizingOptions = []
         panel = LinePanel(content: host)
         panel.placeOnScreen()
+        line.maxItems = Line.historyLimit
         updateCapacity()
         line.onCapture = { [weak self] in self?.captureAdded() }
-        line.onCopyFeedback = { [weak self] in self?.capturePreview.extendForCopyFeedback(at: Date()) }
+        line.onCopyFeedback = { [weak self] in
+            guard let self else { return }
+            self.capturePreview.extendForCopyFeedback(at: Date())
+            self.requestPointerUpdate()
+            if self.line.copiedID != nil {
+                self.releaseSearchFocus()
+            }
+        }
+        line.onSearchEnd = { [weak self] in self?.releaseSearchFocus() }
+        line.onNavigate = { [weak self] in
+            self?.capturePreview.extendForCopyFeedback(at: Date())
+            self?.requestPointerUpdate()
+        }
+        line.onInteractionChange = { [weak self] in self?.requestPointerUpdate() }
+        do {
+            if library == nil, screenshotFolder == nil { library = try ClipdLibrary() }
+            if let library {
+                libraryStartupTask = Task { @MainActor [weak self] in
+                    guard let self, !self.isTerminating else { return }
+                    do {
+                        try await library.connectInBackground(to: self.line, trackApplications: self.screenshotFolder == nil)
+                    } catch is CancellationError {
+                    } catch {
+                        guard !self.isTerminating else { return }
+                        self.line.libraryStatus = "Clipd 歷史暫時無法開啟，現有卡片仍可使用"
+                        log.error("Clipd history loading failed: \(String(describing: error), privacy: .private)")
+                    }
+                }
+            }
+        } catch {
+            line.libraryStatus = "Clipd 歷史暫時無法開啟，現有卡片仍可使用"
+            log.error("Clipd backend startup failed: \(String(describing: error), privacy: .private)")
+        }
 
         if screenshotFolder == nil {
-            if Inbox.isEnabled { applyInbox() }
-            else { Inbox.restore(); prepareScreenshotFolder() }
+            // Retire legacy takeover settings only while wardrobe still owns
+            // them, then follow the user's current macOS screenshot location.
+            Inbox.restore()
         }
-        restoreSettingsOnTermination()
         startWatcher(startedAt: screenshotMonitoringStartedAt)
         setClipboardEnabled(clipboardEnabled)
 
         hotKey = HotKey(keyCode: kVK_ANSI_T, modifiers: controlKey | optionKey) { [weak self] in
             self?.toggle()
         }
+        searchHotKey = HotKey(keyCode: kVK_ANSI_V, modifiers: cmdKey | shiftKey) { [weak self] in
+            self?.showSearch()
+        }
+        line.$searchFocused.dropFirst().sink { [weak self] focused in
+            guard let self else { return }
+            self.requestPointerUpdate()
+            guard focused else { return }
+            self.capturePreview.cancel()
+            self.keepOpen = true
+            self.wanted = true
+            self.refresh()
+            self.reveal(pinned: true)
+            let front = NSWorkspace.shared.frontmostApplication
+            if front?.processIdentifier != ProcessInfo.processInfo.processIdentifier { self.previousSearchApp = front }
+            NSApp.activate(ignoringOtherApps: true)
+        }.store(in: &cancellables)
 
         setUpStatusItem()
         watchMenuBarClicks()
 
-        Markup.shared.onSaved = { [weak self] url in self?.line.reloadThumbnail(for: url) }
-        Markup.shared.onEditingChanged = { [weak self] url in self?.line.editingURL = url }
         line.onFall = { [weak self] item in self?.fall(item) }
 
         line.$items
@@ -105,8 +158,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didActivateApplicationNotification] {
             workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.workspaceChanged()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self?.workspaceChanged() }
+                    guard let self else { return }
+                    self.workspaceChanged()
+                    self.settledWorkspaceUpdate?.cancel()
+                    let update = DispatchWorkItem { [weak self] in self?.workspaceChanged() }
+                    self.settledWorkspaceUpdate = update
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: update)
                 }
             }
         }
@@ -117,11 +174,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             MainActor.assumeIsolated {
                 self?.panel.placeOnScreen()
                 self?.updateCapacity()
+                self?.requestPointerUpdate()
             }
-        }
-
-        if screenshotFolder == nil, !Inbox.wasOffered {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.offerInbox() }
         }
 
         if !defaults.bool(forKey: "welcomed") {
@@ -140,14 +194,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        isTerminating = true
+        libraryStartupTask?.cancel()
+        library?.stop()
         clipboardWatcher?.stop()
         line.cancelClipboardPreparation()
         watcher?.stop()
-        safetyWatcher?.stop()
+        screenshotThumbnails.cancelAll()
         screenshotLocationMonitor?.stop()
         stopMouseTracking()
-        if screenshotFolder == nil { Inbox.restore() }
-        prepareScreenshotFolder()
+        settledWorkspaceUpdate?.cancel()
+        clickMonitors.forEach(NSEvent.removeMonitor)
+        clickMonitors.removeAll()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showSearch()
+        return false
     }
 
     private func setClipboardEnabled(_ enabled: Bool) {
@@ -156,29 +219,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         clipboardWatcher = nil
         line.cancelClipboardPreparation()
         guard enabled else { return }
-        let watcher = ClipboardWatcher(pasteboard: capturePasteboard) { [weak self] payload in
+        let watcher = ClipboardWatcher(pasteboard: capturePasteboard, onTextFormats: { [weak self] formats in self?.line.capturedTextFormats = formats }) { [weak self] payload in
             self?.line.ingestClipboardInBackground(payload) ?? false
         }
         clipboardWatcher = watcher
         watcher.start()
     }
 
-    // MARK: Inbox mode
-
-    private func prepareScreenshotFolder() {
-        guard screenshotFolder == nil else { return }
-        do { try ScreenshotLocation.prepare() }
-        catch {
-            log.error("Could not prepare the Desktop screenshot folder: \(error.localizedDescription, privacy: .private)")
-        }
-    }
+    // MARK: Screenshot monitoring
 
     private func startWatcher(folder: URL? = nil, startedAt: Date = Date()) {
+        screenshotThumbnails.cancelAll()
         screenshotLocationMonitor?.stop()
         screenshotLocationMonitor = nil
         watcher?.stop()
-        safetyWatcher?.stop()
-        safetyWatcher = nil
         watcher = ScreenshotWatcher(
             folder: screenshotFolder ?? folder,
             startedAt: startedAt,
@@ -186,89 +240,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             onChange: { [weak self] in self?.line.prune() })
         watcher.start()
         if screenshotFolder == nil {
-            let monitor = ScreenshotLocationMonitor(folder: watcher.folder, checkedAt: startedAt) { [weak self] folder, cutoff in
+            let monitor = ScreenshotLocationMonitor(folder: watcher.folder, checkedAt: startedAt, onCheck: { [weak self] in
+                guard let self, !self.isTerminating else { return }
+                self.watcher?.reconcile()
+            }) { [weak self] folder, cutoff in
                 self?.startWatcher(folder: folder, startedAt: cutoff)
             }
             screenshotLocationMonitor = monitor
             monitor.start()
-        }
-        if screenshotFolder == nil, Inbox.isEnabled, watcher.folder.standardizedFileURL != ScreenshotWatcher.desktop.standardizedFileURL {
-            let safety = ScreenshotWatcher(
-                folder: ScreenshotWatcher.desktop,
-                startedAt: startedAt,
-                onNew: { [weak self] url in
-                    log.notice("Screenshot landed on the Desktop despite inbox mode: \(url.lastPathComponent, privacy: .public)")
-                    return self?.hangCapture(url) ?? false
-                },
-                onChange: { [weak self] in self?.line.prune() })
-            safety.start()
-            safetyWatcher = safety
-        }
-    }
-
-    private func setInbox(_ on: Bool) {
-        guard screenshotFolder == nil else { return }
-        Inbox.isEnabled = on
-        if on { applyInbox() }
-        else {
-            Inbox.restore()
-            prepareScreenshotFolder()
-        }
-        startWatcher()
-    }
-
-    private func applyInbox() {
-        do { try Inbox.apply() }
-        catch {
-            Inbox.restore()
-            Inbox.isEnabled = false
-            prepareScreenshotFolder()
-            log.error("Could not prepare the screenshot inbox: \(error.localizedDescription, privacy: .private)")
-            NSSound.beep()
-        }
-    }
-
-    /// Asked once. Changing system settings is the user's call, never ours.
-    private func offerInbox() {
-        guard screenshotFolder == nil else { return }
-        Inbox.wasOffered = true
-        let alert = NSAlert()
-        alert.messageText = L("Let wardrobe handle your screenshots?",
-                              "¿Quieres que wardrobe se encargue de tus capturas?")
-        alert.informativeText = L(
-            "Screenshots will hang on the line the instant you take them, without the floating thumbnail, and will not pile up on your Desktop. Drag one to a folder to keep it, or discard it with the cross. You can turn this off from the menu bar, and your settings come back when wardrobe quits.",
-            "Las capturas se colgarán al instante, sin la miniatura flotante, y no se acumularán en el Escritorio. Arrastra una a una carpeta para guardarla, o descártala con la cruz. Puedes desactivarlo desde la barra de menús, y tus ajustes vuelven a ser los de antes al salir de wardrobe.")
-        alert.addButton(withTitle: L("Turn on", "Activar"))
-        alert.addButton(withTitle: L("Not now", "Ahora no"))
-        if let icon = NSImage(named: "wardrobe") ?? NSApp.applicationIconImage { alert.icon = icon }
-        NSApp.activate(ignoringOtherApps: true)
-        if alert.runModal() == .alertFirstButtonReturn { setInbox(true) }
-    }
-
-    /// Quitting from the menu or logging out runs applicationWillTerminate.
-    /// A plain kill does not, so settings are also restored on those signals.
-    private func restoreSettingsOnTermination() {
-        for sig in [SIGTERM, SIGINT, SIGHUP] {
-            signal(sig, SIG_IGN)
-            let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
-            source.setEventHandler { [weak self] in
-                if self?.screenshotFolder == nil { Inbox.restore() }
-                self?.prepareScreenshotFolder()
-                exit(0)
-            }
-            source.resume()
-            signalSources.append(source)
         }
     }
 
     // MARK: Showing and hiding
 
     private func captureAdded() {
+        if !isRevealed { line.resetLibraryView() }
         panel.placeOnScreen(pendingScreen)
         pendingScreen = nil
         updateCapacity()
         wanted = true
         refresh()
+        requestPointerUpdate()
         reveal(forCapture: true)
     }
 
@@ -285,46 +277,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    // MARK: The capture flying to the line
+    // MARK: Screenshot arrival
 
-    /// A new screenshot lifts off from where it was taken and flies to its
-    /// place on the line. Without a known capture area it simply drops in.
+    /// Keep screenshot arrival inside the shelf. A screen-sized transparent
+    /// flight window and a second large image decode compete with desktop rendering.
     @discardableResult
-    private func hangCapture(_ url: URL) -> Bool {
+    func hangCapture(_ url: URL) -> Bool {
         if line.items.contains(where: { $0.url == url && !$0.falling }) { return true }
+        screenshotThumbnails.load(url) { [weak self] image in
+            guard let self, !self.isTerminating, let image,
+                  !self.line.items.contains(where: { $0.url == url && !$0.falling }) else { return }
+            self.hangPreparedCapture(url, image: image)
+        }
+        // Keep the watcher's incomplete-file retry contract. A subsequent scan
+        // acknowledges this URL only after preparation actually created a card.
+        return false
+    }
+
+    private func hangPreparedCapture(_ url: URL, image: CGImage) {
         let from = captureRect(of: url)
         if let from {
             let center = CGPoint(x: from.midX, y: from.midY)
             pendingScreen = NSScreen.screens.first { NSMouseInRect(center, $0.frame, false) }
         }
-        guard let id = line.hang(url, flying: from != nil) else {
+        let thumbnail = NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+        guard line.hang(url, thumbnail: thumbnail) != nil else {
             pendingScreen = nil
-            return false
-        }
-        guard let from else { return true }
-        // Let the line come down and lay out before measuring the landing spot.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
-            self?.fly(id, from: from)
-        }
-        return true
-    }
-
-    private func fly(_ id: UUID, from: CGRect) {
-        guard isPresent, isRevealed, let screen = panel.screen,
-              let to = cardFrame(for: id),
-              let item = line.items.first(where: { $0.id == id }) else {
-            line.land(id)
             return
-        }
-        let pixels = Int(max(from.width, from.height) * screen.backingScaleFactor)
-        guard let image = makeThumbnail(item.url, maxPixels: min(3000, max(400, pixels)))?
-            .cgImage(forProposedRect: nil, context: nil, hints: nil) else {
-            line.land(id)
-            return
-        }
-        CaptureFlight.fly(image: image, from: from, to: to, tilt: CGFloat(item.tilt), on: screen,
-                          destination: { [weak self] in self?.cardFrame(for: id) }) { [weak self] in
-            self?.line.land(id)
         }
     }
 
@@ -339,9 +318,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Where a card will hang, in screen coordinates, using the same layout
     /// as the line view.
     private func cardFrame(for id: UUID) -> CGRect? {
-        guard let index = line.items.firstIndex(where: { $0.id == id }) else { return nil }
+        let visible = line.visibleItems
+        guard let index = visible.firstIndex(where: { $0.id == id }) else { return nil }
         let width = panel.frame.width
-        let x = Layout.x(index: index, count: line.items.count, width: width)
+        let x = Layout.x(index: index, count: visible.count, width: width)
         let viewTop = Layout.ropeY(x: x, width: width) - Layout.pinAbove
         let cardTop = viewTop + PeggedView.cardOffsetBelowTop
         let size = PeggedView.cardSize
@@ -358,6 +338,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panel.placeOnScreen()
         updateCapacity()
         refresh()
+        requestPointerUpdate()
     }
 
     /// Order the panel in whenever there is something to show, in every Space.
@@ -374,18 +355,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func present() {
         isPresent = true
-        panel.alphaValue = 1
-        panel.orderFrontRegardless()
+        if isRevealed { panel.setShelfVisible(true) }
     }
 
     private func dismiss() {
         guard isPresent else { return }
         isPresent = false
         setRevealed(false)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            guard let self, !self.isPresent else { return }
-            self.panel.orderOut(nil)
-        }
+        panel.setShelfVisible(false)
     }
 
     private func reveal(pinned: Bool = false, forCapture: Bool = false, fromHover: Bool = false) {
@@ -399,13 +376,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if pinned { self.pinned = true }
         awaySince = nil
         setRevealed(true)
+        requestPointerUpdate()
     }
 
     private func setRevealed(_ on: Bool) {
         guard on != isRevealed else { return }
         isRevealed = on
+        panel.setShelfVisible(on)
         line.revealed = on
+        library?.setOCRPaused(on)
+        requestPointerUpdate()
         if !on {
+            releaseSearchFocus()
+            line.resetLibraryView()
             hoverReveal.cancel()
             pinned = false
             capturePreview.cancel()
@@ -422,6 +405,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 refresh()
             }
         } else {
+            line.resetLibraryView()
             keepOpen = true
             wanted = true
             panel.placeOnScreen()
@@ -431,19 +415,112 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private func startMouseTracking() {
-        guard mouseTimer == nil else { return }
-        let timer = Timer(timeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.tick() }
+    private func showSearch() {
+        if !isRevealed { line.resetLibraryView() }
+        keepOpen = true
+        wanted = true
+        panel.placeOnScreen()
+        refresh()
+        reveal(pinned: true)
+        panel.makeKeyAndOrderFront(nil)
+        line.searchFocused = true
+    }
+
+    private func releaseSearchFocus() {
+        line.searchFocused = false
+        panel.makeFirstResponder(nil)
+        panel.resignKey()
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier {
+            previousSearchApp?.activate(options: [])
         }
-        RunLoop.main.add(timer, forMode: .common)
-        mouseTimer = timer
+        previousSearchApp = nil
+    }
+
+    private func installEditingMenu() {
+        let main = NSApp.mainMenu ?? NSMenu()
+        if main.items.isEmpty {
+            let app = NSMenuItem()
+            let submenu = NSMenu()
+            submenu.addItem(withTitle: "Quit wardrobe", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+            app.submenu = submenu
+            main.addItem(app)
+        }
+        let edit = NSMenuItem(title: "編輯", action: nil, keyEquivalent: "")
+        let commands = NSMenu(title: "編輯")
+        commands.addItem(withTitle: "復原", action: Selector(("undo:")), keyEquivalent: "z")
+        commands.addItem(.separator())
+        commands.addItem(withTitle: "剪下", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        commands.addItem(withTitle: "複製", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        commands.addItem(withTitle: "貼上", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        commands.addItem(withTitle: "全選", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.submenu = commands
+        main.addItem(edit)
+        NSApp.mainMenu = main
+    }
+
+    private func startMouseTracking() {
+        guard pointerMonitors.isEmpty else { return }
+        panel.acceptsMouseMovedEvents = true
+        let events: NSEvent.EventTypeMask = [.mouseMoved, .leftMouseDragged, .rightMouseDragged,
+                                            .otherMouseDragged, .leftMouseUp, .rightMouseUp, .otherMouseUp]
+        let handler: (NSEvent) -> Void = { [weak self] _ in
+            MainActor.assumeIsolated { self?.requestPointerUpdate() }
+        }
+        if let monitor = NSEvent.addGlobalMonitorForEvents(matching: events, handler: handler) { pointerMonitors.append(monitor) }
+        if let monitor = NSEvent.addLocalMonitorForEvents(matching: events, handler: { event in handler(event); return event }) { pointerMonitors.append(monitor) }
+        requestPointerUpdate()
     }
 
     private func stopMouseTracking() {
-        mouseTimer?.invalidate()
-        mouseTimer = nil
+        pointerMonitors.forEach(NSEvent.removeMonitor)
+        pointerMonitors.removeAll()
+        pointerUpdate?.cancel()
+        pointerUpdate = nil
+        deadlineTimer?.invalidate()
+        deadlineTimer = nil
+        scheduledDeadline = nil
         panel.ignoresMouseEvents = true
+    }
+
+    /// Coalesce motion into one update per display frame. A still pointer has
+    /// no polling cost; only an actual reveal/retract deadline needs a timer.
+    private func requestPointerUpdate() {
+        guard wanted, !isTerminating, pointerUpdate == nil else { return }
+        let update = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pointerUpdate = nil
+            self.tick()
+        }
+        pointerUpdate = update
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 60, execute: update)
+    }
+
+    private var interactionBusy: Bool {
+        GrabView.isDragging || GrabView.isPresentingMenu || line.pressedID != nil ||
+            line.searchFocused || line.editingURL != nil
+    }
+
+    private func scheduleNextDeadline() {
+        let next: Date?
+        if !wanted || isTerminating { next = nil }
+        else if !isRevealed { next = hotZoneSince?.addingTimeInterval(Self.revealDelay) }
+        else if interactionBusy { next = nil }
+        else if let preview = capturePreview.nextDeadline { next = preview }
+        else { next = awaySince?.addingTimeInterval(Self.retractDelay) }
+        guard next != scheduledDeadline else { return }
+        deadlineTimer?.invalidate()
+        deadlineTimer = nil
+        scheduledDeadline = next
+        guard let next else { return }
+        let timer = Timer(timeInterval: max(0.001, next.timeIntervalSinceNow), repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.deadlineTimer = nil
+                self?.scheduledDeadline = nil
+                self?.tick()
+            }
+        }
+        deadlineTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
     }
 
     /// How long the cursor rests against the top edge before the line comes
@@ -464,6 +541,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let handler: (NSEvent?) -> Void = { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
+                self.requestPointerUpdate()
                 let p = NSEvent.mouseLocation
                 guard NSScreen.screens.contains(where: { Self.menuBarBand(of: $0).contains(p) }) else { return }
                 self.menuBarSuppressed = true
@@ -485,6 +563,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let retractDelay: TimeInterval = 5
 
     private func tick() {
+        guard wanted, !isTerminating else { return }
+        defer { scheduleNextDeadline() }
         let mouse = NSEvent.mouseLocation
         let now = Date()
 
@@ -523,7 +603,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // A deadline may expire during an interaction, but a card must not
         // disappear beneath a held pointer, an active drag, or its menu.
-        if GrabView.isDragging || GrabView.isPresentingMenu || line.pressedID != nil {
+        if interactionBusy {
             updateMousePassThrough(mouse)
             awaySince = nil
             return
@@ -589,7 +669,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func updateCapacity() {
-        line.maxItems = Layout.capacity(width: panel.frame.width)
+        let capacity = min(6, Layout.capacity(width: panel.frame.width))
+        if line.pageSize != capacity { line.pageSize = capacity }
     }
 
     // MARK: Menu bar
@@ -630,20 +711,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                               "Guarda imágenes, texto, enlaces y archivos copiados en la línea, solo en este Mac")
         menu.addItem(clipboard)
 
-        let inbox = ClosureMenuItem(L("Handle screenshots", "Encargarse de las capturas")) { [weak self] in
-            self?.setInbox(!Inbox.isEnabled)
-        }
-        inbox.state = Inbox.isEnabled ? .on : .off
-        inbox.isEnabled = screenshotFolder == nil
-        inbox.toolTip = L("Screenshots hang instantly and skip the Desktop",
-                          "Las capturas se cuelgan al instante y no pasan por el Escritorio")
-        menu.addItem(inbox)
-
-        menu.addItem(ClosureMenuItem(L("Open screenshots folder", "Abrir carpeta de capturas")) { [weak self] in
-            guard let self else { return }
-            NSWorkspace.shared.open(self.watcher.folder)
-        })
-
         menu.addItem(.separator())
 
         let sound = ClosureMenuItem(L("Sounds", "Sonidos")) { [weak self] in
@@ -652,6 +719,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         sound.state = line.soundOn ? .on : .off
         menu.addItem(sound)
+        if library != nil {
+            menu.addItem(ClosureMenuItem("搜尋歷史…（⌘⇧V）") { [weak self] in self?.showSearch() })
+        }
 
         let login = ClosureMenuItem(L("Open at login", "Abrir al iniciar sesión")) {
             AppDelegate.toggleLaunchAtLogin()

@@ -5,8 +5,10 @@ import AppKit
 /// everywhere except over the photos.
 final class LinePanel: NSPanel {
     static let overlayBehavior: NSWindow.CollectionBehavior = [
-        .canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary, .stationary, .ignoresCycle
+        .canJoinAllSpaces, .canJoinAllApplications, .fullScreenAuxiliary, .transient, .ignoresCycle
     ]
+    private var shelfVisible = false
+    private var visibilityGeneration = 0
 
     init(content: NSView) {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
@@ -23,8 +25,26 @@ final class LinePanel: NSPanel {
         contentView = content
     }
 
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    /// A tucked shelf should not keep a transparent surface in every Space.
+    /// Visible panels retain their ordering when workspace notifications repeat.
+    func setShelfVisible(_ visible: Bool, hideDelay: TimeInterval = 0.28) {
+        guard shelfVisible != visible || (visible && !isVisible) else { return }
+        shelfVisible = visible
+        visibilityGeneration += 1
+        if visible {
+            if alphaValue != 1 { alphaValue = 1 }
+            if !isVisible { orderFrontRegardless() }
+        } else {
+            let generation = visibilityGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + hideDelay) { [weak self] in
+                guard let self, !self.shelfVisible, self.visibilityGeneration == generation else { return }
+                self.orderOut(nil)
+            }
+        }
+    }
 
     /// The line hangs on the screen you are using, which is the one with the
     /// pointer: that is where you just took the screenshot.

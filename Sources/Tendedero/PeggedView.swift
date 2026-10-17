@@ -5,6 +5,7 @@ import SwiftUI
 struct PeggedView: View {
     let item: Pegged
     @ObservedObject var line: Line
+    var animateArrival = true
 
     @State private var swing: Double = 0
     @State private var arrived = false
@@ -135,6 +136,10 @@ struct PeggedView: View {
             HStack(spacing: 5) {
                 Image(systemName: symbol).foregroundStyle(tint)
                 Text(typeName).fontWeight(.medium)
+                if item.content.isPinned == true { Image(systemName: "pin.fill").font(.system(size: 8)) }
+                if let source = item.content.sourceAppName {
+                    Text(source).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                }
                 Spacer(minLength: 4)
                 // The native Copy button in GrabArea owns this part of the footer.
                 Color.clear.frame(width: CardCopyButton.width, height: CardCopyButton.height)
@@ -146,8 +151,8 @@ struct PeggedView: View {
         .padding(Frame.inset)
         .frame(width: Self.cardSize.width, height: Self.cardSize.height)
         .glassFrame(cornerRadius: Frame.radius)
-        .shadow(color: .black.opacity(hovering ? 0.26 : 0.18), radius: hovering ? 14 : 10, y: hovering ? 8 : 5)
-        .scaleEffect(pressed ? 0.97 : (hovering ? 1.025 : 1), anchor: .top)
+        .shadow(color: .black.opacity(0.18), radius: 10, y: 5)
+        .scaleEffect(pressed ? 0.97 : 1, anchor: .top)
         .animation(pressed ? .easeInOut(duration: 0.45) : .spring(response: 0.3, dampingFraction: 0.6), value: pressed)
         .opacity(dragging ? 0.45 : 1)
         .overlay(alignment: .topLeading) {
@@ -171,14 +176,22 @@ struct PeggedView: View {
     }
 
     private func arrive() {
+        // Browsing saved cards is a page change, not a fresh capture. Keep
+        // their native controls still instead of replaying the long swing.
+        guard animateArrival else {
+            arrived = true
+            return
+        }
         // A capture that flew in is already in place; the flight did the arriving.
         if item.flying {
             arrived = true
             return
         }
-        swing = 16
+        swing = 6
         withAnimation(.spring(response: 0.42, dampingFraction: 0.72)) { arrived = true }
-        withAnimation(.interpolatingSpring(stiffness: 46, damping: 2.6)) { swing = 0 }
+        // Settle new captures promptly instead of recompositing their glass
+        // and shadow for several seconds. Idle breeze keeps its own animation.
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { swing = 0 }
     }
 
     /// Landing after the flight: no jump, just a small sway from rest.
