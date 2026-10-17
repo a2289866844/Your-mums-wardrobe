@@ -9,7 +9,7 @@ import SwiftUI
 /// - The Trash discards it.
 /// - Nowhere that accepts it: the photo flies back to the line.
 ///
-/// The footer button copies; the card opens or drags, an image hold opens Markup.
+/// The footer button copies; the card opens or drags.
 struct GrabArea: NSViewRepresentable {
     let item: Pegged
     let line: Line
@@ -26,6 +26,12 @@ struct GrabArea: NSViewRepresentable {
         configure(view)
     }
 
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: GrabView, context: Context) -> CGSize? {
+        guard let width = proposal.width, let height = proposal.height,
+              width.isFinite, height.isFinite else { return nil }
+        return CGSize(width: width, height: height)
+    }
+
     static func dismantleNSView(_ view: GrabView, coordinator: ()) {
         view.cancelPress()
     }
@@ -36,19 +42,13 @@ struct GrabArea: NSViewRepresentable {
         view.url = item.url
         view.kind = item.kind
         view.previewText = item.previewText
+        view.fullText = { line.textForCard(id) }
         view.linkURL = item.linkURL
         view.dragImage = item.thumb
         view.onClick = { line.open(id) }
         view.onCopy = { line.copy(id) }
-        view.setAccessibilityElement(true)
-        view.setAccessibilityRole(.group)
-        view.setAccessibilityLabel(item.title)
-        view.toolTip = L("Open \(item.title)", "Abrir \(item.title)")
         view.configureAccessibility(title: item.title)
         view.configureCopyButton(title: item.title, copied: copied, failed: copyFailed)
-        view.openElement.setAccessibilityHelp(item.kind == .image
-            ? L("Open this image. Drag the card to another app. Hold the image for Markup.", "Abre esta imagen. Arrastra la tarjeta a otra app. Mantén pulsada la imagen para Marcación.")
-            : L("Open this item. Drag the card to another app.", "Abre este elemento. Arrastra la tarjeta a otra app."))
         view.onDragStart = { line.draggingID = id }
         view.onDragEnd = {
             if line.draggingID == id { line.draggingID = nil }
@@ -58,7 +58,6 @@ struct GrabArea: NSViewRepresentable {
         view.onMoveSettled = { line.prune() }
         view.onTrash = { line.trash(id) }
         view.onDiscard = { line.discard(id) }
-        view.onLongPress = { line.markup(id) }
         view.onPressChange = { pressed in
             if pressed { line.pressedID = id }
             else if line.pressedID == id { line.pressedID = nil }
@@ -67,8 +66,16 @@ struct GrabArea: NSViewRepresentable {
             let menu = NSMenu()
             menu.addItem(ClosureMenuItem(L("Copy", "Copiar")) { line.copy(id) })
             menu.addItem(ClosureMenuItem(L("Open", "Abrir")) { line.open(id) })
-            if item.kind == .image {
-                menu.addItem(ClosureMenuItem(L("Markup", "Marcación")) { line.markup(id) })
+            if item.kind == .text {
+                menu.addItem(ClosureMenuItem(L("Edit text…", "Editar texto…")) { line.open(id) })
+            }
+            if let historyID = item.content.historyID, let library = line.library {
+                menu.addItem(ClosureMenuItem(item.content.isPinned == true ? "取消釘選" : "釘選") {
+                    do { try library.togglePin(historyID) } catch { line.libraryStatus = "無法變更釘選" }
+                })
+                if item.kind == .text || item.kind == .link || !(item.content.ocrText ?? "").isEmpty {
+                    menu.addItem(ClosureMenuItem(item.kind == .image ? "複製圖片文字" : "複製純文字") { line.copyPlainText(id) })
+                }
             }
             menu.addItem(ClosureMenuItem(L("Show in Finder", "Mostrar en Finder")) { line.reveal(id) })
             let inInbox = line.isInInbox(id)
@@ -80,7 +87,9 @@ struct GrabArea: NSViewRepresentable {
                 menu.addItem(ClosureMenuItem(L("Discard", "Descartar")) { line.discard(id) })
             } else {
                 menu.addItem(ClosureMenuItem(L("Take down", "Descolgar")) { line.discard(id) })
-                menu.addItem(ClosureMenuItem(L("Move to Trash", "Mover a la Papelera")) { line.trash(id) })
+                if item.content.historyID == nil || item.kind == .file {
+                    menu.addItem(ClosureMenuItem(L("Move to Trash", "Mover a la Papelera")) { line.trash(id) })
+                }
             }
             return menu
         }
@@ -94,6 +103,7 @@ final class GrabView: NSView, NSDraggingSource {
     var url: URL?
     var kind: ShelfContentKind = .image
     var previewText: String?
+    var fullText: (() -> String?)?
     var linkURL: URL?
     var dragImage: NSImage?
     var onClick: () -> Void = {}
@@ -103,9 +113,25 @@ final class GrabView: NSView, NSDraggingSource {
     var onMoveSettled: () -> Void = {}
     var onTrash: () -> Void = {}
     var onDiscard: () -> Void = {}
-    var onLongPress: () -> Void = {}
     var onPressChange: (Bool) -> Void = { _ in }
     var menuProvider: () -> NSMenu = { NSMenu() }
+
+    private var configuredAccessibilityTitle: String?
+    private var accessibilityKind: ShelfContentKind?
+    private enum CopyFeedback: Equatable { case ready, copied, failed }
+    private struct CopyConfiguration: Equatable {
+        let title: String
+        let feedback: CopyFeedback
+    }
+    private var copyConfiguration: CopyConfiguration?
+    private static let copyImage = copySymbol("doc.on.doc")
+    private static let copiedImage = copySymbol("checkmark")
+    private static let failedImage = copySymbol("exclamationmark.circle")
+
+    private static func copySymbol(_ name: String) -> NSImage? {
+        NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
+    }
 
     let copyButton = CardCopyButton()
     lazy var openElement: CardOpenElement = {
@@ -119,6 +145,8 @@ final class GrabView: NSView, NSDraggingSource {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
         copyButton.target = self
         copyButton.action = #selector(copyItem)
         copyButton.onPressChange = { [weak self] pressed in self?.onPressChange(pressed) }
@@ -129,26 +157,53 @@ final class GrabView: NSView, NSDraggingSource {
 
     override func layout() {
         super.layout()
-        copyButton.frame = NSRect(x: max(0, bounds.width - Frame.inset - 7 - CardCopyButton.width),
-                                  y: Frame.inset + (32 - CardCopyButton.height) / 2,
-                                  width: CardCopyButton.width, height: CardCopyButton.height)
+        let frame = NSRect(x: max(0, bounds.width - Frame.inset - 7 - CardCopyButton.width),
+                           y: Frame.inset + (32 - CardCopyButton.height) / 2,
+                           width: CardCopyButton.width, height: CardCopyButton.height)
+        if copyButton.frame != frame { copyButton.frame = frame }
     }
 
     func configureAccessibility(title: String) {
-        openElement.setAccessibilityLabel(L("Open \(title)", "Abrir \(title)"))
+        if configuredAccessibilityTitle != title {
+            configuredAccessibilityTitle = title
+            setAccessibilityLabel(title)
+            toolTip = L("Open \(title)", "Abrir \(title)")
+            openElement.setAccessibilityLabel(L("Open \(title)", "Abrir \(title)"))
+        }
+        if accessibilityKind != kind {
+            accessibilityKind = kind
+            openElement.setAccessibilityHelp(kind == .image
+                ? L("Open this image. Drag the card to another app.", "Abre esta imagen. Arrastra la tarjeta a otra app.")
+                : L("Open this item. Drag the card to another app.", "Abre este elemento. Arrastra la tarjeta a otra app."))
+        }
     }
 
     func configureCopyButton(title: String, copied: Bool, failed: Bool) {
-        needsLayout = true
-        copyButton.title = copied ? L("Copied", "Copiado") : failed ? L("Retry", "Reintentar") : L("Copy", "Copiar")
-        copyButton.image = NSImage(systemSymbolName: copied ? "checkmark" : failed ? "exclamationmark.circle" : "doc.on.doc",
-                                   accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 11, weight: .semibold))
-        copyButton.contentTintColor = copied ? .systemGreen : failed ? .systemOrange : .labelColor
-        copyButton.toolTip = failed
-            ? L("Could not copy this item. Click to try again.", "No se pudo copiar este elemento. Haz clic para reintentar.")
-            : L("Copy to clipboard", "Copiar al portapapeles")
-        copyButton.setAccessibilityLabel(copied ? L("Copied \(title)", "Copiado \(title)")
-            : failed ? L("Retry copying \(title)", "Reintentar copiar \(title)") : L("Copy \(title)", "Copiar \(title)"))
+        let feedback: CopyFeedback = copied ? .copied : failed ? .failed : .ready
+        let configuration = CopyConfiguration(title: title, feedback: feedback)
+        guard copyConfiguration != configuration else { return }
+        if copyConfiguration?.feedback != feedback {
+            switch feedback {
+            case .ready:
+                copyButton.title = L("Copy", "Copiar")
+                copyButton.image = Self.copyImage
+                copyButton.contentTintColor = .labelColor
+            case .copied:
+                copyButton.title = L("Copied", "Copiado")
+                copyButton.image = Self.copiedImage
+                copyButton.contentTintColor = .systemGreen
+            case .failed:
+                copyButton.title = L("Retry", "Reintentar")
+                copyButton.image = Self.failedImage
+                copyButton.contentTintColor = .systemOrange
+            }
+            copyButton.toolTip = feedback == .failed
+                ? L("Could not copy this item. Click to try again.", "No se pudo copiar este elemento. Haz clic para reintentar.")
+                : L("Copy to clipboard", "Copiar al portapapeles")
+        }
+        copyButton.setAccessibilityLabel(feedback == .copied ? L("Copied \(title)", "Copiado \(title)")
+            : feedback == .failed ? L("Retry copying \(title)", "Reintentar copiar \(title)") : L("Copy \(title)", "Copiar \(title)"))
+        copyConfiguration = configuration
     }
 
     override func accessibilityChildren() -> [Any]? {
@@ -161,12 +216,6 @@ final class GrabView: NSView, NSDraggingSource {
 
     private var downPoint: NSPoint?
     private var startedDrag = false
-    private var holdTimer: Timer?
-    private var didLongPress = false
-
-    /// How long you hold before Markup opens. Long enough not to fire on a
-    /// slow click, short enough to feel deliberate.
-    private static let holdDuration: TimeInterval = 0.45
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -185,7 +234,6 @@ final class GrabView: NSView, NSDraggingSource {
         endPress()
         downPoint = nil
         startedDrag = false
-        didLongPress = false
         // The first click already opened the card; a second click must not
         // launch a second window or a second browser navigation.
         guard event.clickCount == 1 else { return }
@@ -196,33 +244,17 @@ final class GrabView: NSView, NSDraggingSource {
         }
         downPoint = event.locationInWindow
         startedDrag = false
-        didLongPress = false
         onPressChange(true)
-        guard kind == .image else { return }
-        let timer = Timer(timeInterval: Self.holdDuration, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self, self.downPoint != nil, !self.startedDrag else { return }
-                self.holdTimer = nil
-                self.didLongPress = true
-                self.onLongPress()
-                self.onPressChange(false)
-            }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        holdTimer = timer
     }
 
     private func endPress() {
-        holdTimer?.invalidate()
-        holdTimer = nil
         onPressChange(false)
     }
 
-    /// A removed card must not keep a delayed Markup action or press protection.
+    /// A removed card must not keep a pending click or press protection.
     func cancelPress() {
         endPress()
         downPoint = nil
-        didLongPress = false
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
@@ -231,10 +263,10 @@ final class GrabView: NSView, NSDraggingSource {
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let start = downPoint, !startedDrag, !didLongPress else { return }
+        guard let start = downPoint, !startedDrag else { return }
         let p = event.locationInWindow
         guard hypot(p.x - start.x, p.y - start.y) > 4 else { return }
-        // A failed drag still cancels a click/hold. Read text backing files only
+        // A failed drag still cancels a click. Read text backing files only
         // after crossing the threshold, rather than on every pointer movement.
         guard let writer = dragPasteboardWriter() else { cancelPress(); return }
         startedDrag = true
@@ -254,9 +286,8 @@ final class GrabView: NSView, NSDraggingSource {
     override func mouseUp(with event: NSEvent) {
         endPress()
         let releasedInside = bounds.contains(convert(event.locationInWindow, from: nil))
-        if downPoint != nil && !startedDrag && !didLongPress && event.clickCount == 1 && releasedInside { onClick() }
+        if downPoint != nil && !startedDrag && event.clickCount == 1 && releasedInside { onClick() }
         downPoint = nil
-        didLongPress = false
     }
 
     override func rightMouseDown(with event: NSEvent) {
@@ -283,7 +314,8 @@ final class GrabView: NSView, NSDraggingSource {
             // Card previews are deliberately shortened; dragging must retain
             // the full stored text rather than only those visible characters.
             let text: String?
-            if let url { text = ClipboardStore.text(at: url) }
+            if let fullText { text = fullText() }
+            else if let url { text = ClipboardStore.text(at: url) }
             else { text = previewText }
             guard let text else { return nil }
             let item = NSPasteboardItem()
@@ -345,7 +377,7 @@ final class GrabView: NSView, NSDraggingSource {
     }
 }
 
-/// A real button routes copy presses independently from opening, dragging and Markup.
+/// A real button routes copy presses independently from opening and dragging.
 final class CardCopyButton: NSButton {
     static let width: CGFloat = 86
     static let height: CGFloat = 24

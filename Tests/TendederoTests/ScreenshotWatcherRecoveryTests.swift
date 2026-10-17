@@ -23,6 +23,76 @@ final class ScreenshotWatcherRecoveryTests: XCTestCase {
     }
 
     @MainActor
+    func testReconcileFindsCaptureWithoutDirectoryEventAndDoesNotReplayIt() throws {
+        let folder = try temporaryRoot()
+        let capture = folder.appendingPathComponent("quiet.png")
+        // Finish writing before attaching, so the change cannot generate a
+        // directory event. The listing then models a temporarily missed file.
+        try writeImage(to: capture)
+        var visibleFiles: [URL] = []
+        var delivered: [URL] = []
+        let watcher = ScreenshotWatcher(folder: folder, startedAt: .distantPast,
+            listDirectory: { _ in visibleFiles },
+            onNew: { delivered.append($0); return true }, onChange: {})
+        defer { watcher.stop() }
+        watcher.start()
+        XCTAssertTrue(delivered.isEmpty)
+        visibleFiles = [capture]
+        watcher.reconcile()
+        XCTAssertEqual(delivered, [capture])
+        watcher.reconcile()
+        watcher.reconcile()
+        XCTAssertEqual(delivered, [capture], "Accepted identities survive reconciliation")
+    }
+
+    @MainActor
+    func testReconcileReattachesMissingSourceWithoutWaitingForRecovery() throws {
+        let folder = try temporaryRoot()
+        let capture = folder.appendingPathComponent("waiting.png")
+        try writeImage(to: capture)
+        var allowed = false
+        var attempts = 0
+        var deliveries = 0
+        let watcher = ScreenshotWatcher(folder: folder, startedAt: .distantPast, recoveryInterval: 60,
+            openDirectory: { path in
+                attempts += 1
+                return allowed ? open(path, O_EVTONLY) : -1
+            }, onNew: { _ in deliveries += 1; return true }, onChange: {})
+        defer { watcher.stop() }
+        watcher.start()
+        XCTAssertEqual(attempts, 1)
+        allowed = true
+        watcher.reconcile()
+        XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(deliveries, 1)
+        watcher.reconcile()
+        XCTAssertEqual(attempts, 2)
+        XCTAssertEqual(deliveries, 1)
+    }
+
+    @MainActor
+    func testReconcileCannotRestartExplicitlyStoppedWatcher() throws {
+        let folder = try temporaryRoot()
+        let capture = folder.appendingPathComponent("stopped.png")
+        try writeImage(to: capture)
+        var attempts = 0
+        var listings = 0
+        var deliveries = 0
+        let watcher = ScreenshotWatcher(folder: folder, startedAt: .distantPast,
+            openDirectory: { path in attempts += 1; return open(path, O_EVTONLY) },
+            listDirectory: { _ in listings += 1; return [] },
+            onNew: { _ in deliveries += 1; return true }, onChange: {})
+        watcher.reconcile()
+        XCTAssertEqual(attempts, 0, "Reconciliation must not start an idle watcher")
+        watcher.start()
+        watcher.stop()
+        watcher.reconcile()
+        XCTAssertEqual(attempts, 1)
+        XCTAssertEqual(listings, 1)
+        XCTAssertEqual(deliveries, 0)
+    }
+
+    @MainActor
     func testMissingUnicodeFolderRecoversAndDeliversCaptureOnce() async throws {
         let folder = try temporaryRoot().appendingPathComponent("截圖")
         let accepted = expectation(description: "Capture arriving while folder unavailable")

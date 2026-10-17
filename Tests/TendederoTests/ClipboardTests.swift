@@ -476,10 +476,10 @@ final class ClipboardTests: XCTestCase {
     }
 
     @MainActor
-    func testMarkupFileSurvivesEvictionAndDeferredRemovalUntilEditorCloses() async throws {
+    func testTextFileSurvivesEvictionAndDeferredRemovalUntilEditorCloses() async throws {
         let line = Line(defaults: defaults(), clipboardFolder: try folder())
         line.maxItems = 1
-        XCTAssertTrue(line.ingestClipboard(.image(try png())))
+        XCTAssertTrue(line.ingestClipboard(.text("editing this full text")))
         let original = try XCTUnwrap(line.items.first)
         line.editingURL = original.url
         XCTAssertTrue(line.ingestClipboard(.text("newest")))
@@ -765,4 +765,50 @@ final class ClipboardTests: XCTestCase {
         XCTAssertFalse(line.ingestClipboard(.image(Data("not an image".utf8))))
         XCTAssertTrue(line.items.isEmpty)
     }
+    @MainActor
+    func testBackgroundImagePreparationNormalizesOnceAndReusesUnchangedDigest() async throws {
+        let root = try folder(), probe = NormalizationProbe()
+        let worker = ClipboardPreparation(store: ClipboardStore(folder: root), normalize: { probe.normalize($0) })
+        let data = try png()
+        let first: ClipboardPreparation.Result? = await withCheckedContinuation { continuation in
+            worker.prepare(.image(data), candidates: []) { continuation.resume(returning: $0) }
+        }
+        guard case .image(let file) = first else { XCTFail("Image must be prepared"); return }
+        XCTAssertEqual(probe.result.0, 1)
+        XCTAssertFalse(probe.result.1, "Image normalization must stay off the main thread")
+        XCTAssertNotNil(file.thumbnail)
+        XCTAssertEqual(worker.cachedDigest(file.url), file.digest)
+        let second: ClipboardPreparation.Result? = await withCheckedContinuation { continuation in
+            worker.prepare(.image(data), candidates: [file.url]) { continuation.resume(returning: $0) }
+        }
+        guard case .duplicate = second else { XCTFail("An unchanged image must deduplicate"); return }
+        XCTAssertEqual(probe.result.0, 2, "Each incoming image normalizes once; unchanged candidates reuse their hash")
+        try png(red: 1).write(to: file.url, options: .atomic)
+        XCTAssertNil(worker.cachedDigest(file.url), "Replacing the file invalidates its cached digest")
+    }
+
+    @MainActor
+    func testProductionImageIngestionPublishesOnlyAfterPreparationAndRejectsInvalidData() async throws {
+        let line = Line(defaults: defaults(), clipboardFolder: try folder())
+        XCTAssertTrue(line.ingestClipboardInBackground(.image(try png())))
+        XCTAssertTrue(line.items.isEmpty, "Submitting an image must yield without synchronous image work")
+        await line.waitForClipboardPreparation()
+        XCTAssertEqual(line.items.count, 1)
+        XCTAssertTrue(line.ingestClipboardInBackground(.image(Data("invalid image".utf8))))
+        await line.waitForClipboardPreparation()
+        XCTAssertEqual(line.items.count, 1)
+    }
+
+}
+
+
+private final class NormalizationProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls = 0
+    private var mainThread = false
+    func normalize(_ data: Data) -> Data? {
+        lock.lock(); calls += 1; mainThread = mainThread || Thread.isMainThread; lock.unlock()
+        return ClipboardStore.normalizedPNG(data)
+    }
+    var result: (Int, Bool) { lock.lock(); defer { lock.unlock() }; return (calls, mainThread) }
 }

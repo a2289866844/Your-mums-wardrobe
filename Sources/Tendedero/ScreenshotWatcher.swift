@@ -108,6 +108,21 @@ final class ScreenshotWatcher {
         attach()
     }
 
+    /// Periodic reconciliation also catches changes whose directory event was
+    /// lost. Preserve accepted identities and the original startup cutoff.
+    func reconcile() {
+        guard active else { return }
+        if source == nil || source?.isCancelled == true {
+            source?.cancel()
+            source = nil
+            attachment += 1
+            cancelIncompleteWatches()
+            attach()
+        } else {
+            scan()
+        }
+    }
+
     private func attach() {
         guard active, source == nil else { return }
         let fd = openDirectory(folder.path)

@@ -16,6 +16,10 @@ struct ShelfContent: Codable, Equatable {
     var digest: String?
     /// Finder copies are references, even if the user put the file in Inbox.
     var originalFileReference: Bool?
+    var historyID: String?
+    var sourceAppName: String?
+    var ocrText: String?
+    var isPinned: Bool?
 
     static func image(_ url: URL, digest: String? = nil) -> ShelfContent {
         ShelfContent(kind: .image, title: url.lastPathComponent, subtitle: "Image", digest: digest)
@@ -40,8 +44,9 @@ struct ClipboardStore {
         for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Clipline/Clipboard", isDirectory: true)
 
-    func write(_ data: Data, kind: ShelfContentKind, extension ext: String) throws -> (URL, String) {
-        let digest = Self.digest(data)
+    func write(_ data: Data, kind: ShelfContentKind, extension ext: String, preparedDigest: String? = nil) throws -> (URL, String) {
+        let digest = preparedDigest ?? Self.digest(data)
+        guard digest.count == 64, digest.allSatisfy({ $0.isHexDigit && !$0.isUppercase }) else { throw CocoaError(.fileWriteInvalidFileName) }
         var url = folder.appendingPathComponent("\(kind.rawValue)-\(digest).\(ext)")
         let fm = FileManager.default
         guard folder.standardizedFileURL == folder.resolvingSymlinksInPath().standardizedFileURL
@@ -50,7 +55,7 @@ struct ClipboardStore {
         guard safeFolder else { throw CocoaError(.fileWriteNoPermission) }
         if fm.fileExists(atPath: url.path) {
             guard owns(url) else { throw CocoaError(.fileWriteNoPermission) }
-            // Markup can modify a generated image in place. Keep that edited
+            // An external editor can modify a generated file in place. Keep that edited
             // card intact if the original bitmap is copied again later.
             if Self.matches(data, at: url) { return (url, digest) }
             url = folder.appendingPathComponent("\(kind.rawValue)-\(digest)-\(UUID().uuidString.lowercased()).\(ext)")

@@ -8,14 +8,16 @@ final class ClipboardWatcher {
     static let ownCopyType = NSPasteboard.PasteboardType("io.github.a2289866844.clipline.own-copy")
     private let pasteboard: NSPasteboard
     private let onNew: (ClipboardPayload) -> Bool
+    private let onTextFormats: (([CapturedTextFormat]) -> Void)?
     private var timer: Timer?
     private var observedCount: Int
     private var attempts = 0
     private var pendingCount: Int?
 
-    init(pasteboard: NSPasteboard = .general, onNew: @escaping (ClipboardPayload) -> Bool) {
+    init(pasteboard: NSPasteboard = .general, onTextFormats: (([CapturedTextFormat]) -> Void)? = nil, onNew: @escaping (ClipboardPayload) -> Bool) {
         self.pasteboard = pasteboard
         self.onNew = onNew
+        self.onTextFormats = onTextFormats
         observedCount = pasteboard.changeCount
     }
 
@@ -52,6 +54,22 @@ final class ClipboardWatcher {
         // Never deliver mixed representations from different copy operations.
         guard pasteboard.changeCount == count else { attempts = 0; return }
         guard let payload else { observedCount = count; attempts = 0; return }
+        var formats: [CapturedTextFormat] = []
+        if onTextFormats != nil {
+            switch payload {
+            case .text, .link:
+                for type in [NSPasteboard.PasteboardType.rtf, .html] {
+                    guard pasteboard.changeCount == count else { attempts = 0; return }
+                    if let data = pasteboard.data(forType: type), data.count <= ClipboardStore.textLimit {
+                        formats.append(CapturedTextFormat(uti: type.rawValue, data: data))
+                    }
+                    guard pasteboard.changeCount == count else { attempts = 0; return }
+                }
+            default: break
+            }
+        }
+        onTextFormats?(formats)
+        defer { onTextFormats?([]) }
         if onNew(payload) {
             observedCount = count
             attempts = 0
@@ -99,7 +117,7 @@ final class ClipboardWatcher {
         for type in [NSPasteboard.PasteboardType.png, .tiff] {
             guard pasteboard.changeCount == expectedCount else { return nil }
             if let data = pasteboard.data(forType: type), data.count <= ClipboardStore.imageDataLimit,
-               let png = ClipboardStore.normalizedPNG(data) { return .image(png) }
+               !data.isEmpty { return .image(data) }
         }
         guard pasteboard.changeCount == expectedCount else { return nil }
         var text = pasteboard.string(forType: .string)

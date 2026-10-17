@@ -1,6 +1,7 @@
 MIT License
 
 Copyright (c) 2026 Alejandro Buján
+Copyright (c) 2026 a2289866844 (Clipline modifications and contributed ClipdCore)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -32,3 +33,8 @@ You may build and use the app as published, and you may refer to Tendedero
 to say where your work comes from. Modified or redistributed versions must
 use a different name and a different icon, and must not suggest that they
 are Tendedero or are endorsed by its author.
+
+Clarification for this independent modified version: the name and icon
+restrictions above refer to original Tendedero assets. The replacement Clipline
+icon drawn by the current scripts/make-icon.swift and docs/clipline-icon.png
+is provided under the source-code MIT terms above, as stated in NOTICE.md.

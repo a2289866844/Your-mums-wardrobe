@@ -4,11 +4,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 CONFIG="${1:-release}"
 APP="build/Clipline.app"
-VERSION="1.1.6"
+VERSION="1.2.0"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 build_arch() {
-  local triple="$1-apple-macosx14.0"
+  local triple="$1-apple-macosx15.0"
   if ! swift build -c "$CONFIG" --triple "$triple" >&2; then
     if [ -n "${SDKROOT:-}" ]; then return 1; fi
     local fallback
@@ -18,13 +18,19 @@ build_arch() {
     swift build -c "$CONFIG" --triple "$triple" >&2
   fi
   cp "$(swift build -c "$CONFIG" --triple "$triple" --show-bin-path)/Tendedero" "$WORK/Clipline-$1"
+  if [[ "$1" == "arm64" ]]; then
+    ditto "$(swift build -c "$CONFIG" --triple "$triple" --show-bin-path)/SQLCipher.framework" "$WORK/SQLCipher.framework"
+  fi
 }
 build_arch arm64
 build_arch x86_64
 mkdir -p build
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p "$APP/Contents/Frameworks"
+ditto "$WORK/SQLCipher.framework" "$APP/Contents/Frameworks/SQLCipher.framework"
 lipo -create "$WORK/Clipline-arm64" "$WORK/Clipline-x86_64" -output "$APP/Contents/MacOS/Clipline"
+install_name_tool -add_rpath '@executable_path/../Frameworks' "$APP/Contents/MacOS/Clipline"
 swift scripts/make-icon.swift "$WORK/icon.png"
 ICONSET="$WORK/Clipline.iconset"
 mkdir -p "$ICONSET"
@@ -35,6 +41,7 @@ done
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/Clipline.icns"
 cp LICENSE "$APP/Contents/Resources/LICENSE.txt"
 cp NOTICE.md "$APP/Contents/Resources/NOTICE.txt"
+ditto ThirdPartyLicenses "$APP/Contents/Resources/ThirdPartyLicenses"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -46,12 +53,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <key>CFBundleIconFile</key><string>Clipline</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleShortVersionString</key><string>$VERSION</string>
-<key>CFBundleVersion</key><string>8</string>
-<key>LSMinimumSystemVersion</key><string>14.0</string>
+<key>CFBundleVersion</key><string>20</string>
+<key>LSMinimumSystemVersion</key><string>15.0</string>
 <key>LSUIElement</key><true/>
 <key>NSHighResolutionCapable</key><true/>
 <key>NSDesktopFolderUsageDescription</key><string>Clipline watches your screenshot folder to display new captures.</string>
 </dict></plist>
 PLIST
-codesign --force --deep --sign - "$APP" >/dev/null
+codesign --force --sign - "$APP/Contents/Frameworks/SQLCipher.framework" >/dev/null
+codesign --force --sign - "$APP" >/dev/null
 echo "Built $APP"

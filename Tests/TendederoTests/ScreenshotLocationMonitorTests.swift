@@ -27,4 +27,18 @@ final class ScreenshotLocationMonitorTests: XCTestCase {
         monitor.poll()
         XCTAssertEqual(changes, 0)
     }
+
+    @MainActor
+    func testEveryPollChecksWatcherAfterDestinationChange() {
+        var destination = URL(fileURLWithPath: "/tmp/old")
+        var events: [String] = []
+        let monitor = ScreenshotLocationMonitor(folder: destination, resolve: { destination },
+            onCheck: { events.append("check") }, onChange: { _, _ in events.append("change") })
+        monitor.poll()
+        monitor.poll()
+        destination = URL(fileURLWithPath: "/tmp/new")
+        monitor.poll()
+        monitor.poll()
+        XCTAssertEqual(events, ["check", "check", "change", "check", "check"])
+    }
 }

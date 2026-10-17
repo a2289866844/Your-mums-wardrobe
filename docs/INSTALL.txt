@@ -1,63 +1,49 @@
-Clipline 1.1.6 — macOS 14+ / Apple Silicon and Intel
+Clipline 1.2 developer preview — macOS 15+ / Apple Silicon and Intel
 
-Install: drag Clipline.app to Applications, then launch it.
-If macOS blocks the first launch: System Settings → Privacy & Security → Clipline → Open Anyway.
-This shared build uses an ad-hoc signature and is not notarized by Apple.
+Developed and maintained by @a2289866844.
+Based on Tendedero by Alejandro Buján; independent modified build.
 
-Menu-bar paperclip: open settings. Control + Option + T: show or hide the shelf.
-Since 1.1.2, if screenshots are saved directly to Desktop during initial setup,
-Clipline creates Desktop/Screenshots (named 截圖 on Chinese-language systems)
-and saves new screenshots there. Existing custom locations are preserved.
-Old screenshots are not moved. This folder setting remains after quitting Clipline.
-Screenshot monitoring retries if folder access is temporarily unavailable and
-reconnects when the watched folder is replaced. Allow screenshot-folder access
-when macOS asks; an app update may prompt again.
-Click the Copy button on any card to copy it. A checkmark and Copied confirm
-success; Retry indicates a failed copy and lets you try again. Click the card's
-main area to open it. Right-click → Copy remains available.
-Images open in macOS Preview. Enable Clipline in System Settings → Privacy &
-Security → Accessibility to center the matching image window on the display
-where you clicked, keeping its current size. After granting access, click the
-image again. Without access, the image still opens normally.
-Press and hold an image for Markup; other card types have no long-press action.
-Dragging delivers images and files as files, full text as text, and links as URLs.
-Text cards show a summary; copying and dragging preserve the full text.
-Cards have a consistent height. Images fit fully without cropping.
+This source preview is separate from the published 1.1.6 installer.
+Build with Swift 6: swift test, then scripts/build-app.sh.
+A locally packaged app can be dragged into Applications and launched.
+The shared build uses an ad-hoc signature and is not notarized by Apple.
+If macOS blocks it, use System Settings → Privacy & Security → Open Anyway.
+Allow screenshot-folder access when macOS asks.
 
-Hang copied items is enabled by default. It collects newly copied images,
-plain text, HTTP(S) links, and file references. These content types are supported;
-not every clipboard format from every app is preserved.
-Turn it off in the menu bar to pause collection. Protected clipboard markers
-are skipped, but Clipline cannot identify every confidential item.
+Control + Option + T: show or hide the shelf.
+Command + Shift + V: open history search.
+Hover near the notch/top-center edge to reveal cards.
+The shelf displays up to six cards per page and 120 recent items.
+Search queries the archive, with up to 200 matches including Chinese/OCR text.
+OCR runs in the background; a new image may not be searchable immediately.
+
+Copy uses the full content; Copied confirms success and Retry allows another try.
+Click a text card to view or edit it. Images open in the system default app.
+Right-click for pinning and available text-copy options.
+Drag cards into other apps as full text, URLs or file representations.
+New items preview for about three seconds; holding, dragging, menus and
+editing protect the interaction from automatic dismissal.
+Idle card sway and sounds remain available.
+
+Hang copied items is enabled by default; turn it off to pause collection.
+Protected clipboard markers are skipped, but cannot identify every secret.
 Pause collection before copying sensitive content.
-Contents are saved locally and restored after restarting. Clipboard-generated
-contents are stored in:
+
+History uses unencrypted SQLite in:
+~/Library/Application Support/Clipd
+Generated clipboard files use:
 ~/Library/Application Support/Clipline/Clipboard
-External files retain references to their originals. The shelf has 1–12 slots,
-depending on screen width. When full, the oldest card drops off.
+External file cards reference their originals. The recent-card limit does
+not delete older archive records. This preview does not automatically convert
+an existing encrypted Clipd archive; it requires separate offline conversion
+with the original key and a verified backup. See the integration documentation.
 
-Hover reveal uses only the MacBook notch's width at the top of the display,
-derived from its hardware auxiliary-area boundaries. Displays without a notch
-use a centered 180-point top region. The hover delay is about 0.08 seconds.
-After a hover reveal, leaving the display's upper third closes the shelf immediately.
-Idle new screenshots or clipboard items preview for 3 seconds. Holding a card,
-dragging, or using a context menu postpones dismissal.
-After a manual reveal, enter the shelf and then leave it; it closes 5 seconds later.
+The preview follows the screenshot save folder configured in macOS.
+It does not include Markup, Preview-window centering, screenshot takeover,
+sequential copying or abbreviation expansion.
 
-Managing the screenshot location is optional. With Handle screenshots enabled,
-screenshots are saved to ~/Library/Application Support/Clipline/Screenshots.
-Clipline disables macOS floating thumbnails and restores your previous settings
-when this option is disabled or the app quits normally.
-If screenshots appear only after the bottom-right macOS thumbnail disappears,
-press Command + Shift + 5 → Options and disable Show Floating Thumbnail.
-This keeps your save location and avoids delayed file writing; Clipline's own
-new-item preview still lasts 3 seconds.
-Clicking the cross on a screenshot in the private screenshot inbox sends it to
-Trash. Removing an external file reference removes its card and preserves the file.
-
-Downloads, source, and documentation: https://github.com/a2289866844/Your-mums-wardrobe
+Source, stable download and documentation:
+https://github.com/a2289866844/Your-mums-wardrobe
 Bug reports: https://github.com/a2289866844/Your-mums-wardrobe/issues
-Include macOS / Clipline versions, reproduction steps, expected and actual behavior.
-Remove private content before sharing screenshots or recordings.
-Based on Tendedero by Alejandro Buján. Independent modified build, not endorsed by the original author.
-License and original attribution: LICENSE.txt and LICENSE in the repository.
+Include macOS/Clipline versions and reproduction steps; remove private content.
+License and attribution: LICENSE.txt, NOTICE.txt and ThirdPartyLicenses.

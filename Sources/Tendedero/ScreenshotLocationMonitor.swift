@@ -4,16 +4,19 @@ import Foundation
 @MainActor
 final class ScreenshotLocationMonitor {
     private let resolve: () -> URL
+    private let onCheck: () -> Void
     private let onChange: (URL, Date) -> Void
     private var folder: URL
     private var checkedAt: Date
     private var timer: Timer?
 
     init(folder: URL, checkedAt: Date = Date(), resolve: @escaping () -> URL = ScreenshotWatcher.screenshotFolder,
+         onCheck: @escaping () -> Void = {},
          onChange: @escaping (URL, Date) -> Void) {
         self.folder = folder.standardizedFileURL
         self.checkedAt = checkedAt
         self.resolve = resolve
+        self.onCheck = onCheck
         self.onChange = onChange
     }
 
@@ -33,9 +36,12 @@ final class ScreenshotLocationMonitor {
         let previousCheck = checkedAt
         checkedAt = now
         let current = resolve().standardizedFileURL
-        guard current != folder else { return }
-        folder = current
-        // Include captures written between preference checks, without replaying old files.
-        onChange(current, previousCheck)
+        if current != folder {
+            folder = current
+            // Include captures written between preference checks, without replaying old files.
+            onChange(current, previousCheck)
+        }
+        // Reconcile the current watcher after a destination change has replaced it.
+        onCheck()
     }
 }

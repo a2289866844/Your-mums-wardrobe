@@ -6,6 +6,9 @@ enum Layout {
     static let spacing: CGFloat = 244
     static let cardWidth: CGFloat = 220
     static let pinAbove: CGFloat = 9.5
+    static let olderControlID = UUID()
+    static let newerControlID = UUID()
+    static let toolbarControlID = UUID()
 
     static func capacity(width: CGFloat) -> Int {
         max(1, min(12, Int(max(0, width - 200) / spacing)))
@@ -36,24 +39,47 @@ struct LineView: View {
     var body: some View {
         GeometryReader { geo in
             let width = geo.size.width
+            let visible = line.visibleItems
             ZStack(alignment: .topLeading) {
                 Rope(width: width)
 
-                if line.items.isEmpty {
-                    Hint()
+                if visible.isEmpty {
+                    Hint(message: line.showingLibraryResults ? "沒有符合的內容" : nil)
                         .position(x: width / 2, y: Layout.ropeY(x: width / 2, width: width) + 34)
                         .transition(.opacity)
                 }
 
-                ForEach(Array(line.items.enumerated()), id: \.element.id) { index, item in
-                    let x = Layout.x(index: index, count: line.items.count, width: width)
-                    let ropeY = Layout.ropeY(x: x, width: width)
-                    PeggedView(item: item, line: line)
-                        .frame(width: Layout.cardWidth, height: Layout.panelHeight - ropeY, alignment: .top)
-                        .position(x: x, y: ropeY - Layout.pinAbove + (Layout.panelHeight - ropeY) / 2)
+                ZStack(alignment: .topLeading) {
+                    ForEach(Array(visible.enumerated()), id: \.element.id) { index, item in
+                        let x = Layout.x(index: index, count: visible.count, width: width)
+                        let ropeY = Layout.ropeY(x: x, width: width)
+                        PeggedView(item: item, line: line, animateArrival: item.content.historyID == nil)
+                            .frame(width: Layout.cardWidth, height: Layout.panelHeight - ropeY, alignment: .top)
+                            .position(x: x, y: ropeY - Layout.pinAbove + (Layout.panelHeight - ropeY) / 2)
+                            .transition(.asymmetric(insertion: .move(edge: line.pagingOlder ? .leading : .trailing).combined(with: .opacity),
+                                                    removal: .move(edge: line.pagingOlder ? .trailing : .leading).combined(with: .opacity)))
+                    }
+                }
+
+                navigation(older: true)
+                    .position(x: 25, y: 125)
+                if line.hasNewerPage {
+                    navigation(older: false)
+                        .position(x: width - 25, y: 125)
+                }
+                if line.library != nil || !line.libraryStatus.isEmpty {
+                    LibraryToolbar(line: line)
+                        .frame(width: max(260, min(1100, width - 60)), height: 32)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .glassFrame(cornerRadius: 12)
+                        .background(GeometryReader { geo in
+                            Color.clear.preference(key: HitRectsKey.self, value: [Layout.toolbarControlID: geo.frame(in: .global)])
+                        })
+                        .position(x: width / 2, y: 252)
                 }
             }
-            .animation(.spring(response: 0.55, dampingFraction: 0.78), value: line.items.map(\.id))
+            .animation(.easeInOut(duration: 0.22), value: line.pageRevision)
             .animation(.easeInOut(duration: 0.3), value: line.items.isEmpty)
             // Tucked away, the whole line waits above the top edge and slides
             // out from under the menu bar, the way an auto-hiding Dock does.
@@ -62,14 +88,69 @@ struct LineView: View {
                                      : .easeIn(duration: 0.22), value: line.revealed)
         }
         .onPreferenceChange(HitRectsKey.self) { rects in
-            line.hitRects = rects
+            let visibleIDs = Set(line.visibleItems.map(\.id)).union([Layout.olderControlID, Layout.newerControlID, Layout.toolbarControlID])
+            line.hitRects = rects.filter { visibleIDs.contains($0.key) }
         }
+    }
+
+    private func navigation(older: Bool) -> some View {
+        HistoryNavigationButton(older: older, count: max(1, line.pageSize),
+                                available: older ? line.hasOlderPage : line.hasNewerPage, enabled: line.canNavigate) {
+            if older { line.showOlderPage() } else { line.showNewerPage() }
+        }
+        .frame(width: 32, height: 44)
+        .glassFrame(cornerRadius: 16)
+        .shadow(color: .black.opacity(0.15), radius: 5, y: 2)
+        .opacity(older && !line.hasOlderPage ? 0.45 : 1)
+        .background(GeometryReader { geo in
+            Color.clear.preference(key: HitRectsKey.self,
+                value: [older ? Layout.olderControlID : Layout.newerControlID: geo.frame(in: .global)])
+        })
+    }
+}
+
+/// Native buttons remain clickable without making the floating shelf key.
+struct HistoryNavigationButton: NSViewRepresentable {
+    let older: Bool
+    let count: Int
+    let available: Bool
+    let enabled: Bool
+    let action: () -> Void
+
+    final class Coordinator: NSObject {
+        var action: () -> Void = {}
+        @objc func click() { action() }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> NSButton {
+        let button = NSButton()
+        button.isBordered = false
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.click)
+        button.imagePosition = .imageOnly
+        button.focusRingType = .none
+        updateNSView(button, context: context)
+        return button
+    }
+
+    func updateNSView(_ button: NSButton, context: Context) {
+        context.coordinator.action = action
+        let label = older ? L("Previous \(count) items", "\(count) elementos anteriores") : L("Next \(count) items", "\(count) elementos siguientes")
+        button.image = NSImage(systemSymbolName: older ? "chevron.left" : "chevron.right", accessibilityDescription: label)
+        button.contentTintColor = .labelColor
+        button.isEnabled = enabled && available
+        let help = available ? label : L("No older items yet", "Aún no hay elementos anteriores")
+        button.toolTip = help
+        button.setAccessibilityLabel(help)
+        button.setAccessibilityIdentifier(older ? "history-older" : "history-newer")
     }
 }
 
 private struct Hint: View {
+    var message: String? = nil
     var body: some View {
-        Text(L("Take a screenshot or copy something to hang it here", "Haz una captura o copia algo para colgarlo aquí"))
+        Text(message ?? L("Take a screenshot or copy something to hang it here", "Haz una captura o copia algo para colgarlo aquí"))
             .font(.system(size: 12, weight: .medium, design: .rounded))
             .foregroundStyle(.secondary)
             .padding(.horizontal, 12)
