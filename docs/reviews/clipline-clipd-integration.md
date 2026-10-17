@@ -1,6 +1,6 @@
-# Clipline 1.2 developer preview: architecture and verification
+# wardrobe 1.2 developer preview: architecture and verification
 
-This publication combines the maintainer’s Clipline 1.2 source and the ClipdCore library in one checkout. It is a source preview, separate from the published 1.1.6 installer. It requires macOS 15 and a Swift 6 toolchain.
+This publication combines the maintainer’s wardrobe 1.2 source and the ClipdCore library in one checkout. It is a source preview, separate from the published 1.1.6 installer. It requires macOS 15 and a Swift 6 toolchain.
 
 ## Responsibilities and data flow
 
@@ -21,6 +21,8 @@ Image persistence does not wait for OCR: the record and durable `image_ocr_jobs`
 
 ## Local storage and compatibility
 
+The product is now named **wardrobe**. The legacy bundle identifier (`io.github.a2289866844.clipline`), own-copy marker and storage paths remain stable so the rename can reuse existing preferences and data. Build output is `build/wardrobe.app`; new local packages use the `wardrobe-<version>-universal` prefix.
+
 The default archive directory is `~/Library/Application Support/Clipd`. The preview opens ordinary, unencrypted SQLite, with local image blobs and references to external originals. Existing encrypted Clipd archives require a separate offline conversion using the original key and a verified backup. The [conversion helper](../../scripts/convert-archive-to-plaintext.swift) exports into a new directory and compares records; it does not replace the original or run automatically at launch.
 
 The ClipdCore sources are compiled as a local SwiftPM target. The separate Clipd application, compatibility launcher, personal clipboard records, keys and local backups are not part of this publication. SQLCipher 4.17.0 is pinned and its supplied license is included in the app and installer. The archive is unencrypted despite the dependency’s name.
@@ -33,7 +35,7 @@ History, Chinese/OCR search, pins, text editing, full-content Copy, drag, automa
 
 Fresh verification on October 16, 2026 used this self-contained checkout:
 
-- `swift test` passed **179 Clipline XCTest tests** and **253 ClipdCore Swift Testing tests**, with zero failures.
+- `swift test` passed **179 wardrobe XCTest tests** and **253 ClipdCore Swift Testing tests**, with zero failures.
 - `scripts/build-app.sh` built the production executable and embedded SQLCipher framework for **arm64 and x86_64**.
 - `codesign --verify --deep --strict` passed for the app and its embedded framework. The app includes the SQLCipher license notice.
 - A native isolated fixture linked this checkout’s production source and exercised six-card browsing, Chinese search, an empty-result query, and the Pinned scope. Its real Copy control returned all **779 characters** of an archived text card and the private own-copy marker. The fixture used a private archive, folder, pasteboard and preferences.

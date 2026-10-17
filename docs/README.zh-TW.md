@@ -1,6 +1,6 @@
-# Clipline
+# wardrobe
 
-Clipline 是由 [@a2289866844](https://github.com/a2289866844) 維護的 macOS 截圖與剪貼簿卡片架，基於 [Alejandro Buján 的 Tendedero](https://github.com/alejandrobujan/tendedero) 1.0.0，使用獨立名稱與圖示。它讓你從螢幕上方叫出卡片，複製完整內容，或拖曳到其他 App。
+wardrobe（原名 Clipline）是由 [@a2289866844](https://github.com/a2289866844) 維護的 macOS 截圖與剪貼簿卡片架，基於 [Alejandro Buján 的 Tendedero](https://github.com/alejandrobujan/tendedero) 1.0.0，使用獨立名稱與圖示。它讓你從螢幕上方叫出卡片，複製完整內容，或拖曳到其他 App。
 
 [English README](../README.md) · [相對於 Tendedero 的改動](CHANGES-FROM-TENDEDERO.md) · [問題回報](https://github.com/a2289866844/Your-mums-wardrobe/issues)
 
@@ -17,8 +17,8 @@ Clipline 是由 [@a2289866844](https://github.com/a2289866844) 維護的 macOS �
 
 ## 安裝已發布版本
 
-1. 下載 `Clipline-1.1.6-universal.dmg`，將 `Clipline.app` 拖到「應用程式」。
-2. 開啟 Clipline。若 macOS 阻擋，前往「系統設定 → 隱私權與安全性」，找到提示後選擇「強制打開」。此版本使用 ad-hoc 簽章，未經 Apple 公證。
+1. 下載舊版 `Clipline-1.1.6-universal.dmg`，將仍以原名發布的 `Clipline.app` 拖到「應用程式」。
+2. 開啟舊版 Clipline。若 macOS 阻擋，前往「系統設定 → 隱私權與安全性」，找到提示後選擇「強制打開」。此版本使用 ad-hoc 簽章，未經 Apple 公證。
 3. 系統詢問時，允許存取截圖資料夾。選單列的迴紋針是 Clipline。
 
 1.1.6 可能在首次設定時調整 Desktop 截圖目的地，並提供截圖管理功能；詳見其[版本說明](releases/1.1.6.md)與[1.1.6 英文使用說明](https://github.com/a2289866844/Your-mums-wardrobe/blob/976a4ad/README.md)。1.2 已移除截圖接管，會跟隨 macOS 已設定的截圖資料夾。
@@ -45,11 +45,11 @@ git clone --branch codex/clipline-public-1.2 https://github.com/a2289866844/Your
 cd Your-mums-wardrobe
 swift test
 scripts/build-app.sh
-open build/Clipline.app
+open build/wardrobe.app
 ```
 
-`scripts/make-dmg.sh` 可產生安裝映像、ZIP 與 SHA-256 校驗檔。測試與建置不代表所有螢幕、全螢幕 App 或拖曳目的地都已人工驗證；詳見[整合紀錄](reviews/clipline-clipd-integration.md)。
+`scripts/make-dmg.sh` 會產生 `wardrobe-1.2.0-universal.dmg`、`wardrobe-1.2.0-universal.zip` 與 SHA-256 校驗檔。測試與建置不代表所有螢幕、全螢幕 App 或拖曳目的地都已人工驗證；詳見[整合紀錄](reviews/clipline-clipd-integration.md)。
 
 ## 致謝與授權
 
-原始卡片架與上游實作來自 Alejandro Buján 的 Tendedero。Clipline 的剪貼簿、互動、可靠性與資料庫整合改動由 @a2289866844 維護；資料庫、文字索引及 OCR 基於 ClipdCore。原始 MIT 授權與作者聲明保留於 [LICENSE](../LICENSE)。Clipline 是獨立修改版，不代表上游作者背書。
+原始卡片架與上游實作來自 Alejandro Buján 的 Tendedero。wardrobe 的剪貼簿、互動、可靠性與資料庫整合改動由 @a2289866844 維護；資料庫、文字索引及 OCR 基於 ClipdCore。原始 MIT 授權與作者聲明保留於 [LICENSE](../LICENSE)。wardrobe 是獨立修改版，不代表上游作者背書。

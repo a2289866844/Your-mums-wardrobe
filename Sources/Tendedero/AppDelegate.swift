@@ -115,7 +115,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         if screenshotFolder == nil {
-            // Retire legacy takeover settings only while Clipline still owns
+            // Retire legacy takeover settings only while wardrobe still owns
             // them, then follow the user's current macOS screenshot location.
             Inbox.restore()
         }
@@ -439,7 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if main.items.isEmpty {
             let app = NSMenuItem()
             let submenu = NSMenu()
-            submenu.addItem(withTitle: "Quit Clipline", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+            submenu.addItem(withTitle: "Quit wardrobe", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
             app.submenu = submenu
             main.addItem(app)
         }
@@ -675,7 +675,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setUpStatusItem() {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        let image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: "Clipline")
+        let image = NSImage(systemSymbolName: "paperclip", accessibilityDescription: "wardrobe")
         image?.isTemplate = true
         statusItem.button?.image = image
         let menu = NSMenu()
@@ -728,7 +728,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(login)
 
         menu.addItem(.separator())
-        menu.addItem(ClosureMenuItem(L("Quit Clipline", "Salir de Clipline"), key: "q") {
+        menu.addItem(ClosureMenuItem(L("Quit wardrobe", "Salir de wardrobe"), key: "q") {
             NSApp.terminate(nil)
         })
     }
@@ -743,8 +743,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             let alert = NSAlert()
             alert.messageText = L("Could not change the login setting", "No se pudo cambiar el inicio de sesión")
-            alert.informativeText = L("Move Clipline to the Applications folder and try again.",
-                                      "Mueve Clipline a la carpeta Aplicaciones y vuelve a intentarlo.")
+            alert.informativeText = L("Move wardrobe to the Applications folder and try again.",
+                                      "Mueve wardrobe a la carpeta Aplicaciones y vuelve a intentarlo.")
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
         }

@@ -2,7 +2,7 @@ import Foundation
 import ImageIO
 
 /// Watches the folder macOS saves screenshots to and reports new ones.
-/// Clipline never takes screenshots itself: you keep your usual shortcut
+/// wardrobe never takes screenshots itself: you keep your usual shortcut
 /// (or CleanShot, or anything else) and the line just picks them up.
 final class ScreenshotWatcher {
     let folder: URL
@@ -128,7 +128,7 @@ final class ScreenshotWatcher {
         let fd = openDirectory(folder.path)
         guard fd >= 0 else {
             if !reportedOpenFailure {
-                NSLog("Clipline: cannot watch \(folder.path); retrying")
+                NSLog("wardrobe: cannot watch \(folder.path); retrying")
                 reportedOpenFailure = true
             }
             scheduleRecovery()

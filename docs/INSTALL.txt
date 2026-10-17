@@ -1,11 +1,11 @@
-Clipline 1.2 developer preview — macOS 15+ / Apple Silicon and Intel
+wardrobe 1.2 developer preview (previously named Clipline) — macOS 15+ / Apple Silicon and Intel
 
 Developed and maintained by @a2289866844.
 Based on Tendedero by Alejandro Buján; independent modified build.
 
 This source preview is separate from the published 1.1.6 installer.
 Build with Swift 6: swift test, then scripts/build-app.sh.
-A locally packaged app can be dragged into Applications and launched.
+The locally built app is build/wardrobe.app; the next universal archives are wardrobe-1.2.0-universal.dmg and wardrobe-1.2.0-universal.zip.
 The shared build uses an ad-hoc signature and is not notarized by Apple.
 If macOS blocks it, use System Settings → Privacy & Security → Open Anyway.
 Allow screenshot-folder access when macOS asks.
@@ -45,5 +45,5 @@ sequential copying or abbreviation expansion.
 Source, stable download and documentation:
 https://github.com/a2289866844/Your-mums-wardrobe
 Bug reports: https://github.com/a2289866844/Your-mums-wardrobe/issues
-Include macOS/Clipline versions and reproduction steps; remove private content.
+Include macOS/wardrobe versions and reproduction steps; remove private content.
 License and attribution: LICENSE.txt, NOTICE.txt and ThirdPartyLicenses.

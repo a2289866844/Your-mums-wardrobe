@@ -1,4 +1,4 @@
-// Original Clipline icon: a mint paperclip holding a white snapshot on navy.
+// Original wardrobe icon: a mint paperclip holding a white snapshot on navy.
 // Usage: swift scripts/make-icon.swift out.png
 import AppKit
 
