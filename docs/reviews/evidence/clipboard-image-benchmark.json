@@ -1,0 +1,70 @@
+{
+  "baselineCommit": "976a4ad6def227899c0fad5cd41dc4d3fc0b6a37",
+  "build": "swiftc -O; Apple Silicon; private pasteboards; three trials per size",
+  "results": {
+    "baseline": [
+      {
+        "completionMilliseconds": [
+          61.92424986511469,
+          25.407083332538605,
+          21.728666499257088
+        ],
+        "height": 900,
+        "mainMilliseconds": [
+          61.92229222506285,
+          25.407041423022747,
+          21.72795869410038
+        ],
+        "pngBytes": 22295,
+        "width": 1200
+      },
+      {
+        "completionMilliseconds": [
+          230.750042013824,
+          309.9232502281666,
+          327.6636665686965
+        ],
+        "height": 3000,
+        "mainMilliseconds": [
+          230.74949998408556,
+          309.92316734045744,
+          327.6632083579898
+        ],
+        "pngBytes": 217054,
+        "width": 4000
+      }
+    ],
+    "optimized": [
+      {
+        "completionMilliseconds": [
+          36.47845797240734,
+          16.103832982480526,
+          15.773708000779152
+        ],
+        "height": 900,
+        "mainMilliseconds": [
+          0.7330002263188362,
+          0.18129125237464905,
+          0.17466675490140915
+        ],
+        "pngBytes": 22295,
+        "width": 1200
+      },
+      {
+        "completionMilliseconds": [
+          124.05312433838844,
+          122.74041585624218,
+          149.75837524980307
+        ],
+        "height": 3000,
+        "mainMilliseconds": [
+          0.19445829093456268,
+          0.186040997505188,
+          0.2727499231696129
+        ],
+        "pngBytes": 217054,
+        "width": 4000
+      }
+    ]
+  }
+}

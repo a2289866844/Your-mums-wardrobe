@@ -163,7 +163,7 @@ final class ClipboardTests: XCTestCase {
         pb.clearContents()
         pb.setData(try png(), forType: .png)
         watcher.poll()
-        guard case .image = payloads.first else { return XCTFail("Expected image") }
+        guard case .imageRepresentations = payloads.first else { return XCTFail("Expected encoded image representations") }
         setText("https://example.com/path", on: pb)
         watcher.poll()
         guard case .link(let url) = payloads.last else { return XCTFail("Expected link") }
