@@ -32,7 +32,7 @@ enum ClipboardPayload: Sendable {
 }
 
 /// Only content created here is eligible for automatic deletion. External file
-/// references, including files in other Clipline folders, are never owned.
+/// references, including files in other wardrobe folders, are never owned.
 struct ClipboardStore {
     static let textLimit = 1_048_576
     static let imageDataLimit = 64 * 1_048_576

@@ -1,11 +1,11 @@
 import Foundation
 
-/// Inbox mode: Clipline takes over where screenshots go.
+/// Inbox mode: wardrobe takes over where screenshots go.
 ///
 /// It changes two macOS screenshot settings, the same ones in the Options
 /// menu of Cmd+Shift+5: the floating thumbnail is turned off, so the file is
 /// written at once instead of five seconds later, and the save location
-/// becomes Clipline's own folder, so the Desktop only gets what you keep.
+/// becomes wardrobe's own folder, so the Desktop only gets what you keep.
 ///
 /// The previous values are saved first and put back when the mode is turned
 /// off or the app quits, so macOS is never left pointing at a folder nobody
