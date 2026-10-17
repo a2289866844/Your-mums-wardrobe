@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a problem with Clipline
+about: Report a problem with wardrobe
 title: ''
 labels: bug
 assignees: ''
@@ -8,7 +8,7 @@ assignees: ''
 
 **Versions**
 - macOS:
-- Clipline:
+- wardrobe:
 - Mac / display setup, if relevant:
 
 **Steps to reproduce**

@@ -1,21 +1,21 @@
-Clipline 1.1.6 — macOS 14+ / Apple Silicon and Intel
+wardrobe 1.1.6 — macOS 14+ / Apple Silicon and Intel
 
-Install: drag Clipline.app to Applications, then launch it.
-If macOS blocks the first launch: System Settings → Privacy & Security → Clipline → Open Anyway.
+Install: drag wardrobe.app to Applications, then launch it.
+If macOS blocks the first launch: System Settings → Privacy & Security → wardrobe → Open Anyway.
 This shared build uses an ad-hoc signature and is not notarized by Apple.
 
 Menu-bar paperclip: open settings. Control + Option + T: show or hide the shelf.
 Since 1.1.2, if screenshots are saved directly to Desktop during initial setup,
-Clipline creates Desktop/Screenshots (named 截圖 on Chinese-language systems)
+wardrobe creates Desktop/Screenshots (named 截圖 on Chinese-language systems)
 and saves new screenshots there. Existing custom locations are preserved.
-Old screenshots are not moved. This folder setting remains after quitting Clipline.
+Old screenshots are not moved. This folder setting remains after quitting wardrobe.
 Screenshot monitoring retries if folder access is temporarily unavailable and
 reconnects when the watched folder is replaced. Allow screenshot-folder access
 when macOS asks; an app update may prompt again.
 Click the Copy button on any card to copy it. A checkmark and Copied confirm
 success; Retry indicates a failed copy and lets you try again. Click the card's
 main area to open it. Right-click → Copy remains available.
-Images open in macOS Preview. Enable Clipline in System Settings → Privacy &
+Images open in macOS Preview. Enable wardrobe in System Settings → Privacy &
 Security → Accessibility to center the matching image window on the display
 where you clicked, keeping its current size. After granting access, click the
 image again. Without access, the image still opens normally.
@@ -28,7 +28,7 @@ Hang copied items is enabled by default. It collects newly copied images,
 plain text, HTTP(S) links, and file references. These content types are supported;
 not every clipboard format from every app is preserved.
 Turn it off in the menu bar to pause collection. Protected clipboard markers
-are skipped, but Clipline cannot identify every confidential item.
+are skipped, but wardrobe cannot identify every confidential item.
 Pause collection before copying sensitive content.
 Contents are saved locally and restored after restarting. Clipboard-generated
 contents are stored in:
@@ -46,18 +46,18 @@ After a manual reveal, enter the shelf and then leave it; it closes 5 seconds la
 
 Managing the screenshot location is optional. With Handle screenshots enabled,
 screenshots are saved to ~/Library/Application Support/Clipline/Screenshots.
-Clipline disables macOS floating thumbnails and restores your previous settings
+wardrobe disables macOS floating thumbnails and restores your previous settings
 when this option is disabled or the app quits normally.
 If screenshots appear only after the bottom-right macOS thumbnail disappears,
 press Command + Shift + 5 → Options and disable Show Floating Thumbnail.
-This keeps your save location and avoids delayed file writing; Clipline's own
+This keeps your save location and avoids delayed file writing; wardrobe's own
 new-item preview still lasts 3 seconds.
 Clicking the cross on a screenshot in the private screenshot inbox sends it to
 Trash. Removing an external file reference removes its card and preserves the file.
 
 Downloads, source, and documentation: https://github.com/a2289866844/Your-mums-wardrobe
 Bug reports: https://github.com/a2289866844/Your-mums-wardrobe/issues
-Include macOS / Clipline versions, reproduction steps, expected and actual behavior.
+Include macOS / wardrobe versions, reproduction steps, expected and actual behavior.
 Remove private content before sharing screenshots or recordings.
 Based on Tendedero by Alejandro Buján. Independent modified build, not endorsed by the original author.
 License and original attribution: LICENSE.txt and LICENSE in the repository.
