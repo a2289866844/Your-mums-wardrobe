@@ -38,7 +38,7 @@ The 1.2 source now combines the clipboard-preparation changes with the archive i
 - Full verification passed **201 wardrobe XCTest tests** and **253 ClipdCore Swift Testing tests**, with zero failures.
 - Integration regressions cover image → rich text → malformed-image rich-text fallback → link → plain-text ordering; exact HTML/RTF and own-copy-marker readback; cancellation without format leakage; original capture-time/source metadata; and a lazy rich-format provider replacing the clipboard with private content.
 - The universal arm64/x86_64 production app and embedded SQLCipher framework built and passed strict nested signature verification.
-- A native isolated fixture delivered a synthetic **4000 × 3000 PNG** through the actual clipboard watcher into the archive. Clicking the real Copy button showed **Copied**, retained both full dimensions and the own-copy marker, and returned the archived PNG bytes. The archived image’s decoded pixels matched the source exactly; normalization changed only its PNG encoding.
+- A native isolated fixture delivered a synthetic **4000 × 3000 PNG** through the actual clipboard watcher into the archive. Clicking the real Copy button showed **Copied**, retained both full dimensions and the own-copy marker, and returned the archived PNG bytes. The archived image’s decoded RGBA pixels matched the source exactly.
 
 Rich-text checks above are automated archive/readback tests. Native interaction ran on Apple Silicon with private fixture storage, folders, pasteboard and preferences. The merge does not replace the installed application or publish a new installer.
 
